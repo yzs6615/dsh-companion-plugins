@@ -39,7 +39,8 @@ let bad = 0
 for (const t of tgzs) {
   const dir = path.join(scan, path.basename(t))
   fs.mkdirSync(dir)
-  execFileSync('tar', ['-xzf', t, '-C', dir])
+  // 包名只给文件名、在包所在目录里解：Git 带的 GNU tar 会把 “C:\...” 当成远程主机
+  execFileSync('tar', ['-xzf', path.basename(t), '-C', dir], { cwd: path.dirname(t) })
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
   for (const f of walk(dir)) {
     const rel = path.relative(dir, f).replace(/\\/g, '/')
@@ -70,10 +71,17 @@ fs.mkdirSync(dl, { recursive: true })
 for (const f of ['downloader.mjs']) fs.copyFileSync(path.join(ROOT, 'downloader', f), path.join(dl, f))
 fs.copyFileSync(path.join(ROOT, 'scripts', 'plugins.mjs'), path.join(dl, 'plugins.mjs')) // 换掉仓库里那个转手的 plugins.mjs
 fs.writeFileSync(path.join(dl, '安装.cmd'), fs.readFileSync(path.join(ROOT, 'downloader', '安装.cmd'), 'utf8').replace(/\r?\n/g, '\r\n'))
-const zip = (from, to) => execFileSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Path '${from}\\*' -DestinationPath '${to}' -Force`])
+// 打 zip：Windows 用系统自带的 tar（bsdtar，-a 按扩展名打成 zip），别的系统用 zip 命令
+const zip = (from, to) => {
+  fs.rmSync(to, { force: true })
+  if (process.platform === 'win32') execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-c', '--options', 'zip:hdrcharset=UTF-8', '-f', to, '-C', from, '.'])
+  else execFileSync('zip', ['-qr', to, '.'], { cwd: from })
+}
 zip(dl, path.join(DIST, '下载器.zip'))
 const all = path.join(stage, '全部插件')
-fs.cpSync(dl, all, { recursive: true })
+// 不用 fs.cpSync：Node 24 在 Windows 上复制中文名的文件夹会直接崩掉（不报错，退出码 127）
+fs.mkdirSync(all)
+for (const f of fs.readdirSync(dl)) fs.copyFileSync(path.join(dl, f), path.join(all, f))
 fs.mkdirSync(path.join(all, 'packages'))
 for (const t of tgzs) fs.copyFileSync(t, path.join(all, 'packages', path.basename(t)))
 zip(all, path.join(DIST, '全部插件.zip'))

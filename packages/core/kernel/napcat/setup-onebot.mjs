@@ -52,7 +52,7 @@ const config = {
   enableLocalFile2Url: false,
   parseMultMsg: false,
   imageDownloadProxy: '',
-  timeout: { baseTimeout: 10000, uploadSpeedKBps: 256, downloadSpeedKBps: 256, maxTimeout: 1800000 },
+  timeout: { baseTimeout: 10000, uploadSpeedKBps: 256, downloadSpeedKBps: 256, maxTimeout: 30 * 60_000 },
 };
 
 const targets = [path.join(CONFIG_DIR, 'onebot11.json')];
