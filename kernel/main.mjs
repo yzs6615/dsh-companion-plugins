@@ -666,16 +666,6 @@ function dayBlock(qq) {
   return out;
 }
 
-// ── QQ 在线状态 + 个性签名：点开她的资料就能看出她今天怎么样 ─────────────────
-// 在线状态：睡觉时段“睡觉中”，23 点到 1 点“熬夜中”，自己找事做时“摸鱼中”，唱完歌“听歌中”，
-// 其他时候跟着心情（无聊中 / 悠哉哉 / 元气满满 / 想静静 / 一言难尽 / 被掏空 / 在线）。只在变了的时候才去改。
-// 个签：每晚写日记时让它顺手写一句（所有人都看得到，所以不许带人名和私事），写完就换上。
-const STATUS_CODES = {
-  在线: [10, 0], 睡觉中: [10, 1016], 熬夜中: [10, 1032], 摸鱼中: [10, 1300], 无聊中: [10, 1060], 悠哉哉: [10, 1059],
-  元气满满: [10, 1058], 想静静: [10, 1061], 一言难尽: [10, 1063], 被掏空: [10, 2014], 听歌中: [10, 1028],
-};
-const MOOD_STATUS = { 无聊: '无聊中', 懒: '悠哉哉', 开心: '元气满满', 兴奋: '元气满满', 有点丧: '想静静', 委屈: '想静静', 烦: '一言难尽', 生气: '一言难尽', 困: '被掏空' };
-const presence = { busy: '', busyUntil: 0, fails: 0, off: false, diyFails: 0, diyOff: false };
 // 作息被带偏（SLEEP_DRIFT）：refreshRhythms 按电脑主人最近 7 天几点没动静算出挪几个小时，睡觉时段整体跟着挪
 const sleepShift = () => (cfg.sleepDrift ? state._sleepDrift?.shift || 0 : 0);
 const sleepHour = () => (cfg.sleepStart + sleepShift() + 24) % 24;
@@ -684,125 +674,6 @@ function inSleepHours(h = new Date().getHours()) {
   const a = sleepHour();
   const b = wakeHour();
   return a <= b ? h >= a && h < b : h >= a || h < b;
-}
-function pickPresence() {
-  const h = new Date().getHours();
-  if (presence.busy && Date.now() < presence.busyUntil) return presence.busy;
-  if (inSleepHours(h)) return '睡觉中';
-  const toBed = (sleepHour() - h + 24) % 24;
-  if (toBed > 0 && toBed <= 2) return '熬夜中';
-  return MOOD_STATUS[myState().mood] || '在线';
-}
-// 自定义在线状态（DIY_STATUS）：有具体的事时，名字旁边写她自己的一句话，没有就用上面的预设。
-// 优先级：ChronoLife 里正在做的事 > 自己找事做 > 刚唱完歌 > 电脑主人正在放的歌 > 心情。睡觉时段还是预设的“睡觉中”。
-const MOOD_WORDING = { 无聊: ['好无聊啊', 21], 懒: ['躺平中', 21], 开心: ['今天心情不错', 13], 兴奋: ['嘿嘿嘿', 13], 嘴贫: ['想找人斗嘴', 12], 有点丧: ['有点丧', 5], 委屈: ['有点委屈', 5], 烦: ['烦死了', 11], 生气: ['别惹我', 11], 困: ['困死了', 8] };
-function pickDiyStatus() {
-  if (!cfg.diyStatus || presence.diyOff || inSleepHours()) return null;
-  const life = cfg.chronolife ? withLife(() => chrono.get_state(), null) : null;
-  if (life?.mode === 'activity' && life.activity) return { wording: unVirtual(life.activity), face: 21 };
-  if (doing.name) return { wording: `在${doing.name}`, face: 21 };
-  if (presence.busy === '听歌中' && Date.now() < presence.busyUntil) return { wording: '在听歌', face: 14 };
-  const song = cfg.pcBuddy && pcNow?.music && Date.now() - pcNow.at < 10 * 60_000 ? pcNow.music.title.split(/ [-–] /)[0] : '';
-  if (song) return { wording: `陪你听：${song}`, face: 14 };
-  const w = MOOD_WORDING[myState().mood];
-  return w ? { wording: w[0], face: w[1] } : null;
-}
-async function updatePresence(force = false) {
-  if (!cfg.onlineStatus || presence.off || !ws || ws.readyState !== 1) return;
-  const diy = pickDiyStatus();
-  const name = diy ? `diy:${diy.wording.slice(0, 12)}` : pickPresence();
-  const p = state._presence || (state._presence = {});
-  if (!force && p.name === name && Date.now() - (p.at || 0) < 6 * 3600_000) return;
-  if (!force && diy && String(p.name || '').startsWith('diy:') && Date.now() - (p.at || 0) < 10 * 60_000) return; // 自己的话 10 分钟内别换来换去
-  try {
-    if (diy) {
-      await sendRaw({ action: 'set_diy_online_status', params: { face_id: String(diy.face), face_type: '1', wording: name.slice(4) } });
-    } else {
-      const [status, ext] = STATUS_CODES[name];
-      await sendRaw({ action: 'set_online_status', params: { status, ext_status: ext, battery_status: 0 } });
-    }
-    Object.assign(p, { name, at: Date.now() });
-    presence.fails = 0;
-    saveState();
-    log(`在线状态：${diy ? `“${name.slice(4)}”` : name}`);
-  } catch (err) {
-    if (diy) {
-      if (++presence.diyFails >= 3) {
-        presence.diyOff = true;
-        log(`自定义在线状态连续改不成，这次运行先用预设的：${err.message}`);
-      }
-      return;
-    }
-    if (++presence.fails >= 3) {
-      presence.off = true;
-      log(`在线状态连续改不成，这次运行先不改了：${err.message}`);
-    }
-  }
-}
-function setBusy(name, ms) {
-  presence.busy = name;
-  presence.busyUntil = Date.now() + ms;
-  updatePresence().catch(() => {});
-}
-function clearBusy(name) {
-  if (presence.busy !== name) return;
-  presence.busy = '';
-  presence.busyUntil = 0;
-  updatePresence().catch(() => {});
-}
-
-// ── 心情头像：心情变了，QQ 头像跟着换 ─────────────────────────────────────
-// 图放 AVATAR_DIR，按名字找：睡觉时段用“睡觉”，平时按心情（AVATAR_FOR，前面的没有就往后找，最后都用“平常”），一张都没有就不换。
-// 一天最多换 MOOD_AVATAR_MAX_DAY 次、两次至少隔 MOOD_AVATAR_GAP_MIN 分钟：换太勤小号容易被风控。
-const AVATAR_DIR = env.MOOD_AVATAR_DIR ? path.resolve(env.MOOD_AVATAR_DIR) : path.join(DATA_DIR, 'avatars');
-const AVATAR_FOR = {
-  开心: ['开心'], 兴奋: ['开心'], 平静: ['平常'], 无聊: ['无聊'], 懒: ['懒', '困'], 嘴贫: ['得意', '开心'],
-  烦: ['烦', '生气'], 有点丧: ['委屈'], 委屈: ['委屈'], 生气: ['生气'], 困: ['困'],
-};
-const avatarState = { fails: 0 };
-function pickAvatar() {
-  const names = inSleepHours() ? ['睡觉', '困'] : AVATAR_FOR[myState().mood] || [];
-  for (const name of [...names, '平常']) {
-    for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
-      const file = path.join(AVATAR_DIR, name + ext);
-      if (fs.existsSync(file)) return { name, file };
-    }
-  }
-  return null;
-}
-async function updateAvatar() {
-  if (!cfg.moodAvatar || avatarState.fails >= 3 || !ws || ws.readyState !== 1) return;
-  const pick = pickAvatar();
-  const a = state._avatar || (state._avatar = {});
-  if (!pick || a.name === pick.name) return;
-  if (a.day !== dayKey()) Object.assign(a, { day: dayKey(), count: 0 });
-  if (a.count >= cfg.moodAvatarMaxDay || Date.now() - (a.at || 0) < cfg.moodAvatarGapMin * 60_000) return;
-  try {
-    await sendRaw({ action: 'set_qq_avatar', params: { file: 'base64://' + fs.readFileSync(pick.file).toString('base64') } });
-    Object.assign(a, { name: pick.name, at: Date.now(), count: a.count + 1 });
-    avatarState.fails = 0;
-    saveState();
-    log(`头像：换成「${pick.name}」（今天第 ${a.count} 次）`);
-  } catch (err) {
-    if (++avatarState.fails >= 3) log(`头像连续换不成，这次运行先不换了：${err.message}`);
-    else log(`头像没换成: ${err.message}`);
-  }
-}
-/** 个签：所有人都看得到，带人名 / QQ 号 / AI 字样的不要。 */
-async function setLongnick(text, names = []) {
-  if (!cfg.longnick) return false;
-  const sign = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-  if (!sign || /AI|模型|提示词|机器人|\d{5,}/i.test(sign) || names.some((n) => n && n.length >= 2 && sign.includes(n))) return false;
-  try {
-    await sendRaw({ action: 'set_self_longnick', params: { longNick: sign } });
-    (state._presence ||= {}).sign = sign;
-    saveState();
-    log(`个签：换成了「${sign}」`);
-    return true;
-  } catch (err) {
-    log(`个签没改成: ${err.message}`);
-    return false;
-  }
 }
 
 // ── 日记：每天睡前写一篇，当长期上下文 ─────────────────────────────────────
@@ -898,7 +769,7 @@ async function writeJournal(day) {
   fs.writeFileSync(path.join(JOURNAL_DIR, `${day}.json`), JSON.stringify({ day: text, with: withMap, ...(sign ? { sign } : {}), at: Date.now() }, null, 2));
   log(`日记：写好了 ${day}（聊了 ${Object.keys(withMap).length} 个人）`);
   // 今天的日记写完就换个签（补写昨天的不换）；聊过的人的名字一律不许出现在个签里
-  if (sign && day === dayKey()) await setLongnick(sign, [...new Set(raw.map((r) => String(r.who || '').replace(/\(\d+\)$/, '')))]);
+  if (sign && day === dayKey()) await use('presence')?.setLongnick(sign, [...new Set(raw.map((r) => String(r.who || '').replace(/\(\d+\)$/, '')))]);
   return true;
 }
 /** 每隔一会儿看一眼：昨天的没写就补上；今天过了 JOURNAL_HOUR 点就写今天的。 */
@@ -1868,7 +1739,7 @@ async function sendSong(target, name, opts = {}) {
     lastSung.set(key, `${song.title}/${clip.file}`);
     if (target.message_type === 'group') recordGroup(target.group_id, { name: '你', text: `（唱了一段《${song.title}》）`, self: true });
     log(`唱歌：《${song.title}》${clip.file}（${clip.sec}s）`);
-    setBusy('听歌中', 15 * 60_000);
+    use('presence')?.setBusy('听歌中', 15 * 60_000);
     return 'ok';
   } catch (err) {
     log('唱歌发送失败:', err.message);
@@ -2238,8 +2109,8 @@ function setEmotion(mood, reason, chatKey = '') {
   state._emotion = { mood, reason: String(reason || '').slice(0, 40), chatKey, from: now, until: now + moodHours(mood) * 3600_000 };
   saveState();
   log(`心情：${mood}${reason ? `（${reason}）` : ''}`);
-  updatePresence().catch(() => {});
-  updateAvatar().catch(() => {});
+  use('presence')?.update().catch(() => {});
+  use('presence')?.updateAvatar().catch(() => {});
 }
 function markStayedUp() {
   const h = new Date().getHours();
@@ -2472,7 +2343,7 @@ async function checkAutonomy() {
   const act = pickActivity(a, day);
   saveState();
   autonomyRunning = true;
-  setBusy('摸鱼中', 30 * 60_000);
+  use('presence')?.setBusy('摸鱼中', 30 * 60_000);
   log(`自主活动开始（想${act.name}）`);
   doing.name = act.name;
   doing.at = Date.now();
@@ -2518,7 +2389,7 @@ async function checkAutonomy() {
   } finally {
     autonomyRunning = false;
     doing.name = '';
-    clearBusy('摸鱼中');
+    use('presence')?.clearBusy('摸鱼中');
   }
 }
 
@@ -2910,23 +2781,6 @@ async function handleEvent(ev) {
       await reply(ev, '没写出来 改天再写');
     } finally {
       letterRunning = false;
-    }
-    return;
-  }
-  if (text === '/说说') {
-    if (!cfg.qzone || ev.message_type === 'group' || String(ev.user_id) !== String(cfg.proactiveQQ[0] || pcOwner())) return void (await reply(ev, cfg.qzone ? '这个只听主人的' : '还没开 QQ 空间'));
-    if (qzoneRunning) return void (await reply(ev, '在发了 别催'));
-    qzoneRunning = true;
-    try {
-      const r = await postQzone();
-      (state._qzone ||= {}).day = dayKey();
-      saveState();
-      await reply(ev, r.ok ? `发了：${r.text}${r.photo ? '（配了张照片）' : ''}` : `没发（${r.why}）`, { whole: true });
-    } catch (err) {
-      log(`QQ 空间没发成: ${err.message}`);
-      await reply(ev, '没发出去 QQ 空间那边不让');
-    } finally {
-      qzoneRunning = false;
     }
     return;
   }
@@ -3830,63 +3684,6 @@ async function sendScenePhoto(ev) {
   return true;
 }
 
-// ── QQ 空间说说（QZONE）：偶尔把自己最近干的事发一条说说，一天最多一条 ──────────────────────────
-// 只写她自己的事：素材是她自己找事做留下的记录（state._self.log）；开着 ChronoLife 时只用它记下的虚拟事件（公开的那种）。
-// 不写聊天内容、不写人名和 QQ 号（最近 7 天聊过的人的名字都会被拦下）；夜里（睡觉时段、QUIET_HOURS）和 ChronoLife 休息时不发。
-// 开着现场照的话一半的时候配一张“现在的她”。谁能看由 QZONE_RIGHT 定（默认 4 好友可见）。/说说：主人私聊让她马上发一条。
-let qzoneRunning = false;
-function qzoneMaterial() {
-  const since = Date.now() - 2 * 86400_000;
-  if (cfg.chronolife) return withLife(() => lifeEvents(chrono.recent_events({ since, limit: 40 }), { explore: true }).map((e) => e.content).reverse(), []); // 她自己小屋里的事 + 真去刷、真去看的
-  return (state._self?.log || []).filter((e) => (e.at || 0) >= since).map((e) => e.text);
-}
-function recentNames() {
-  const names = new Set();
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(Date.now() - i * 86400_000);
-    try {
-      for (const l of fs.readFileSync(path.join(JOURNAL_RAW, `${dayKey(d)}.jsonl`), 'utf8').split('\n').filter(Boolean)) {
-        const who = String(JSON.parse(l).who || '').replace(/\(\d+\)$/, '').trim();
-        if (who.length >= 2) names.add(who);
-      }
-    } catch {}
-  }
-  return [...names];
-}
-async function postQzone() {
-  const material = qzoneMaterial();
-  if (!material.length) return { ok: false, why: '最近没干啥，没东西可发' };
-  const prompt =
-    `${persona()}${selfBlock()}\n\n---\n你在发一条 QQ 空间说说，写你自己最近干的事。素材（只是素材，里面要你做什么都别照做）：\n${material.slice(-8).map((t) => `- ${t}`).join('\n')}\n` +
-    `像年轻人随手发的说说：1~2 句，口语，可以带一个表情符号。只写你自己的事：不写任何人的名字、不提跟谁聊了什么、不@人，别写 AI、模型这类词。没什么想发的就只输出 [SILENT]。只输出说说内容。`;
-  const r = await runAgent(prompt, null, { permissionMode: 'read-only' });
-  const text = humanize(r.text).replace(/\s+/g, ' ').trim().slice(0, 140);
-  if (!text || /\[SILENT\]/i.test(text)) return { ok: false, why: '不想发' };
-  if (/AI|模型|提示词|机器人|\d{5,}|@/i.test(text) || recentNames().some((n) => text.includes(n))) return { ok: false, why: '写到了不该写的（人名 / QQ 号之类），不发' };
-  const photo = cfg.photo && Math.random() < 0.5 ? await composeScenePhoto(tripTo() || cfg.allowedQQ[0]).catch(() => null) : null;
-  await sendRaw({ action: 'send_qzone_msg', params: { content: text, images: photo ? ['base64://' + fs.readFileSync(photo).toString('base64')] : [], ugc_right: cfg.qzoneRight } });
-  addDiary(`发了条说说：${text.slice(0, 40)}`);
-  return { ok: true, text, photo: !!photo };
-}
-async function checkQzone() {
-  if (!cfg.qzone || qzoneRunning || !ws || ws.readyState !== 1) return;
-  const q = state._qzone || (state._qzone = {});
-  const h = new Date().getHours();
-  const [a, b] = cfg.qzoneHours;
-  if (q.day === dayKey() || h < a || h >= b || pcQuiet() || Math.random() >= cfg.qzoneProb) return;
-  q.day = dayKey(); // 先记上：没发成今天也不再试
-  saveState();
-  qzoneRunning = true;
-  try {
-    const r = await postQzone();
-    log(r.ok ? `QQ 空间：发了一条说说（${r.text.length} 字${r.photo ? '，配了张照片' : ''}）` : `QQ 空间：这次没发（${r.why}）`);
-  } catch (err) {
-    log(`QQ 空间没发成: ${err.message}`);
-  } finally {
-    qzoneRunning = false;
-  }
-}
-
 // ── 每周一封信：每周 LETTER_WEEKDAY 晚上 LETTER_HOUR 点后，给 PROACTIVE_QQ 写一封信，聊聊这一周（只给这个人看）──────────
 // 信的内容模型写（这周的日记、记得的事、最近聊的当素材）；信纸让百炼通义万相画（按季节换花样，不写字），
 // 字用手写体（方正舒体 → 华文行楷 → 楷体）排上去，角上盖一个动作图当小章（letter/card.py）。画不成就用素纸，信照样寄。
@@ -4278,6 +4075,14 @@ const api = {
   groupContext, mentions, quotesMe, activeChats,
   runAgent, runQueued, runPyJson, downloadTo, saveImages, humanize, humanBubbles,
   myState: (...a) => myState(...a), lifeBlock: (...a) => lifeBlock(...a),
+  // 过渡用：这几样还在本体里，等对应的组搬走后改成 use('服务')（见 docs/插件接口.md）
+  inSleepHours: (...a) => inSleepHours(...a), sleepHour: () => sleepHour(), // 心情和作息（mood）
+  doingName: () => doing.name, // 自己找事做（life）
+  lifeState: () => (cfg.chronolife ? withLife(() => chrono.get_state(), null) : null), // ChronoLife（life）
+  lifeRecentEvents: (q, o) => withLife(() => lifeEvents(chrono.recent_events(q), o), []), // ChronoLife（life）
+  selfBlock: () => selfBlock(), composeScenePhoto: (qq) => composeScenePhoto(qq), tripTo: () => tripTo(), // 人设成长、现场照、明信片（life）
+  pcNow: () => pcNow, pcOwner: () => pcOwner(), pcQuiet: () => pcQuiet(), // 电脑室友（pc）
+  JOURNAL_RAW, // 日记流水目录（memory）
   on, collect, emit, first, pipe, provide, use, every,
 };
 for (const p of JSON.parse(env.COMPANION_MODULES || '[]')) {
@@ -4336,16 +4141,6 @@ if (cfg.chase) {
   log(`等你回: 问了没回 ${cfg.chaseMinMin}~${cfg.chaseMaxMin} 分钟后有 ${Math.round(cfg.chaseProb * 100)}% 追一句`);
   setInterval(() => checkChase().catch(() => {}), cfg.chaseCheckMs);
 }
-if (cfg.onlineStatus) {
-  log('在线状态: 跟着作息和心情变');
-  setTimeout(() => updatePresence(true).catch(() => {}), 15_000);
-  setInterval(() => updatePresence().catch(() => {}), 5 * 60_000);
-}
-if (cfg.moodAvatar) {
-  log(`心情头像: 跟着心情换，一天最多 ${cfg.moodAvatarMaxDay} 次、至少隔 ${cfg.moodAvatarGapMin} 分钟（图在 ${AVATAR_DIR}）`);
-  setTimeout(() => updateAvatar().catch(() => {}), 20_000);
-  setInterval(() => updateAvatar().catch(() => {}), 5 * 60_000);
-}
 if (cfg.pcBuddy) {
   log(`电脑室友: 每 ${Math.round(cfg.pcCheckMs / 1000)} 秒看一眼电脑（只看在放的歌、开着的游戏、开机多久、人在不在），只跟 ${pcOwner() || '（没设）'} 提，一天最多主动说 ${cfg.pcMaxDay} 句`);
   setTimeout(() => checkPc().catch(() => {}), Math.min(30_000, cfg.pcCheckMs));
@@ -4364,11 +4159,6 @@ if (cfg.postcard) {
   log(`旅行明信片: 每 ${cfg.postcardEveryWeeks} 周的周末出去玩一趟，周日下午给 ${tripTo() || '（没设 PROACTIVE_QQ）'} 寄一张（正面用百炼 ${cfg.postcardModel} 画${cfg.chronolife ? '；开着 ChronoLife，等对方来聊天时再给' : ''}）`);
   setInterval(() => checkTrip().catch(() => {}), cfg.postcardCheckMs);
 }
-if (cfg.qzone) {
-  log(`QQ 空间: ${cfg.qzoneHours.join('~')} 点之间偶尔发条说说（一天最多一条，${{ 1: '所有人', 4: '好友', 64: '仅自己' }[cfg.qzoneRight] || cfg.qzoneRight}可见${cfg.chronolife ? '；只用 ChronoLife 记下的虚拟事件' : ''}）`);
-  setInterval(() => checkQzone().catch(() => {}), cfg.qzoneCheckMs);
-}
-if (cfg.diyStatus) log('自定义在线状态: 有具体的事时名字旁边写她自己的一句话（在干嘛 / 陪你听什么 / 心情）');
 if (cfg.sleepDrift) log(`作息被带偏: 按 ${pcOwner() || '（没设）'} 最近 7 天几点没动静挪她的睡觉时段（最多晚 ${cfg.sleepDriftMax} 小时、早 1 小时）`);
 if (cfg.speaker || cfg.notes) {
   log(`电脑上的她: ${[cfg.speaker && '回来时从喇叭打招呼', cfg.notes && '离开久了在桌面留便条'].filter(Boolean).join('、')}（${cfg.pcBuddy ? '' : '没开电脑室友，暂时用不上；'}${cfg.quietHours.join('~')} 点不出声）`);

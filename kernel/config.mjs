@@ -135,14 +135,8 @@ export const cfg = {
   chaseCheckMs: Number(env.CHASE_CHECK_MS ?? 30_000),
   recall: (env.RECALL || 'true') !== 'false', // 对方撤回：没回的那条就不回了；熟人偶尔调侃一句
   recallTeaseProb: Number(env.RECALL_TEASE_PROB ?? 0.5),
-  onlineStatus: (env.ONLINE_STATUS || 'true') !== 'false', // QQ 在线状态跟着作息和心情变（睡觉中/摸鱼中/元气满满…）
-  longnick: (env.LONGNICK || 'true') !== 'false', // 每晚写完日记顺手改一句个性签名
-  diyStatus: (env.DIY_STATUS || 'false') === 'true', // 自定义在线状态：名字旁边写她自己的一句话（在干嘛 / 陪你听什么 / 心情），没有具体的事就用预设的
   sleepDrift: (env.SLEEP_DRIFT || 'false') === 'true', // 作息被带偏：电脑的主人最近老熬夜 / 早睡，她的睡觉时段跟着挪
   sleepDriftMax: Number(env.SLEEP_DRIFT_MAX ?? 2), // 最多被带晚几个小时（带早最多 1 小时）
-  moodAvatar: (env.MOOD_AVATAR || 'false') === 'true', // 心情头像：心情变了换 QQ 头像（图放 data/avatars/，按心情起名）
-  moodAvatarMaxDay: Number(env.MOOD_AVATAR_MAX_DAY ?? 4), // 一天最多换几次（换太勤小号容易被风控）
-  moodAvatarGapMin: Number(env.MOOD_AVATAR_GAP_MIN ?? 90), // 两次之间至少隔多少分钟
   // 电脑室友：看得见这台电脑在放什么歌、开着什么游戏、开了多久、人在不在电脑前；只跟电脑的主人提
   pcBuddy: (env.PC_BUDDY || 'false') === 'true',
   pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）
@@ -174,12 +168,6 @@ export const cfg = {
   letterHour: Number(env.LETTER_HOUR ?? 21),
   letterModel: env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
   letterCheckMs: Number(env.LETTER_CHECK_MS ?? 600_000),
-  // QQ 空间说说：偶尔把自己最近干的事发一条（只写她自己的事，不写聊天内容和人名）；开着 ChronoLife 时只用它记下的虚拟事件
-  qzone: (env.QZONE || 'false') === 'true',
-  qzoneProb: Number(env.QZONE_PROB ?? 0.012), // QZONE_HOURS 里每次检查发一条的概率（10 分钟看一次，大概两天一条；一天最多一条）
-  qzoneHours: (env.QZONE_HOURS || '12-22').split('-').map(Number),
-  qzoneRight: Number(env.QZONE_RIGHT ?? 4), // 谁能看：1 所有人，4 好友，64 仅自己
-  qzoneCheckMs: Number(env.QZONE_CHECK_MS ?? 600_000),
   // 旅行明信片：隔几周的周末她在自己的小世界里出去玩一趟（周五定去哪），周日下午给 PROACTIVE_QQ 寄一张明信片（正面百炼画当地风景）
   postcard: (env.POSTCARD || 'false') === 'true',
   postcardEveryWeeks: Number(env.POSTCARD_EVERY_WEEKS ?? 3),
