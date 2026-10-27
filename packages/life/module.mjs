@@ -20,12 +20,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BILI = path.join(HERE, 'bili', 'bili.mjs');
 const LIFE = path.join(HERE, 'life', 'life.mjs');
 
-export default async function setup(api) {
-  const { cfg, env, log, readJson, pick, sleep, pace, state, saveState, userState, sessions, saveSessions, DATA_DIR, activeChats } = api;
-  const { persona, readMemory, appendMemory, addDiary, reply, say, sendMsg, senderName, runAgent, runQueued, runPyJson, humanize, myState, lifeBlock } = api;
-  const { dayKey, nowDesc, playChance, chooseActivity, extractMoodTag, extractDiary, parseJsonLoose } = api.human;
-  const use = api.use;
-  Object.assign(cfg, {
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     ...chronoSettings(env), // ChronoLife 的几项（chronolife/settings.mjs，定时任务的 worker.mjs 也用）
     autonomy: (env.AUTONOMY || 'false') === 'true',
     autonomyMinutes: Number(env.AUTONOMY_MINUTES || 45), // 两次自己玩之间至少隔多久
@@ -61,7 +58,15 @@ export default async function setup(api) {
     postcardEveryWeeks: Number(env.POSTCARD_EVERY_WEEKS ?? 3),
     postcardModel: env.POSTCARD_IMAGE_MODEL || env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
     postcardCheckMs: Number(env.POSTCARD_CHECK_MS ?? 600_000),
-  });
+  };
+}
+
+export default async function setup(api) {
+  const { cfg, env, log, readJson, pick, sleep, pace, state, saveState, userState, sessions, saveSessions, DATA_DIR, activeChats } = api;
+  const { persona, readMemory, appendMemory, addDiary, reply, say, sendMsg, senderName, runAgent, runQueued, runPyJson, humanize, myState, lifeBlock } = api;
+  const { dayKey, nowDesc, playChance, chooseActivity, extractMoodTag, extractDiary, parseJsonLoose } = api.human;
+  const use = api.use;
+  Object.assign(cfg, settings(env, api.parseList));
 
   // ── ChronoLife：她自己的小屋（chronolife/，SQLite）────────────────────────────
   // 打不开（老 Node 没有 node:sqlite、数据库坏了）就只记一笔：普通聊天照常，停发自主消息，短期记忆、长期事实、日记都当没有（memoryOff）
@@ -1093,4 +1098,79 @@ node "${LIFE}" seen                  最近看过的
     log(`自主活动: 每小时掷一次骰子（基础 ${Math.round(cfg.autonomyRollProb * 100)}%，看心情），两次至少隔 ${cfg.autonomyMinutes} 分钟，每天最多 ${cfg.autonomyMax} 次`);
     api.every(cfg.autonomyCheckMs, checkAutonomy, Math.min(90_000, cfg.autonomyCheckMs));
   }
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。开着 ChronoLife 时只读打开它的数据库看现在的样子（node:sqlite 用到时才 import，打不开就只显示开关）；
+ * taken 是开着 ChronoLife 时交给它管的旧主动通道（别的插件的行名 → [说明, 是否整个不单独发了]）；sections 是“它慢慢长出来的样子”那块。
+ */
+export async function features(cfg, { env, DATA_DIR, state, readJson, esc, when, on }) {
+  const SCENE_DIR = env.SCENE_DIR ? path.resolve(env.SCENE_DIR) : path.join(DATA_DIR, 'scene');
+  let life = null;
+  if (cfg.chronolife) {
+    try {
+      const { DatabaseSync } = await import('node:sqlite');
+      const db = new DatabaseSync(path.join(DATA_DIR, 'chronolife', 'life.sqlite'), { readOnly: true });
+      const get = (sql, ...args) => db.prepare(sql).get(...args);
+      const settings = Object.fromEntries(db.prepare('SELECT * FROM runtime_settings').all().map((r) => [r.key, JSON.parse(r.value)]));
+      const st = JSON.parse(get('SELECT data FROM character_state WHERE id=1').data);
+      const world = JSON.parse(get('SELECT data FROM virtual_world_state WHERE id=1').data);
+      const week = get("SELECT COUNT(*) AS n FROM outbound_messages WHERE status IN ('pending','sending','sending_answered','sent','unknown','answered') AND created>?", Date.now() - 7 * 86400_000).n;
+      const last = get("SELECT content FROM timeline_events WHERE scope='global' AND id LIKE 'detail:%' ORDER BY at DESC LIMIT 1")?.content || '';
+      db.close();
+      // 跟 engine.get_state() 一样的判法：停用 > 休息/免打扰 > 刚聊过 > 在做事 > 空闲
+      const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: settings.timezone, hour: 'numeric', hourCycle: 'h23' }).format(Date.now()));
+      const quiet = settings.quietStart > settings.quietEnd ? hour >= settings.quietStart || hour < settings.quietEnd : hour >= settings.quietStart && hour < settings.quietEnd;
+      const mode = !settings.enabled ? '停用' : settings.rest ? '休息（主人让歇着）' : quiet ? '休息（夜里）' : Date.now() - st.lastInteraction < 10 * 60000 ? '在跟人聊天' : Date.now() < st.activityUntil ? '在做事' : '空闲';
+      life = { settings, mode, plant: world.plant?.stage || '—', week, last: last.replace(/虚拟/g, '').slice(0, 60) };
+    } catch {
+      life = { error: true };
+    }
+  }
+  const selfProfile = readJson(path.join(DATA_DIR, 'self-profile.json'), {});
+  const selfItems = Array.isArray(selfProfile.items) ? selfProfile.items : [];
+  return {
+    groups: [
+      ['她自己的生活', [
+        ['ChronoLife 小屋', on(cfg.chronolife), life ? (life.error ? '数据库打不开：普通聊天照常，小屋暂停' : `现在：${life.mode} · 窗台植物：${life.plant}${life.last ? ` · 最近：${life.last}` : ''}`) : '', `她有一间自己的小屋，每 30 分钟过一次日子：窗台养着一盆植物（种子→发芽→幼苗→展开新叶，按天长），有时照顾植物、整理笔记、写点东西、发呆休息（一天最多 4 件，也可能一件都不做；夜里和你刚找过她时不开始新的）。每件事先记个大概，再让模型补一两句这次具体干了啥。聊天时她知道小屋里最近的事，不会说成在现实里出了门。电脑关着时由 Windows 定时任务接着算，开机只补一句“离开了几个小时”。/生活 帮助 看命令，详细说明在 ${path.join(HERE, 'chronolife', 'README.md')}。`],
+        ['自己找事做', on(cfg.autonomy), `10–23 点每小时掷一次骰子（基础 ${Math.round(cfg.autonomyRollProb * 100)}%）· 两次至少隔 ${cfg.autonomyMinutes} 分钟 · 每天最多 ${cfg.autonomyMax} 次`, `每小时在随机的某一分钟问自己“要不要玩会”：无聊、兴奋的时候更想玩，困、懒、没精神就不太想动；你 ${cfg.autonomyIdleMin} 分钟内找过它就先陪你。想玩就先挑一件想干的事——刷 B站、看番、刷知乎热榜、刷微博热搜、听歌（看榜单、歌词和网易云热评），有手机的话还会玩手机，记得你喜欢什么的话还会专门找点你会喜欢的；跟上一次的错开，今天干过的少挑。刷到跟你喜好有关的会发给你（“看到这个就想到你”）；你在她刷东西的时候来找她，她知道自己正在干嘛；顺手记“今天干过啥”。${cfg.chronolife ? '开着 ChronoLife 时照常玩，算她小屋生活里的一件事（休息、停用时不玩）；想发给你也要过 ChronoLife 主动分享那几条规矩。' : ''}`],
+        ['刷 B站', 'on', (() => { const seen = readJson(path.join(DATA_DIR, 'bili', 'seen.json'), []); return `${env.BILIBILI_SESSDATA ? '已登录（能读字幕）' : '没登录（看弹幕热评，字幕靠听）'} · 最近看过 ${seen.length} 个${seen[0] ? `，上一个：${seen[0].title}` : ''}`; })(), '不用手机，直接走 B站接口：热门 / 排行 / 搜索；看一个视频能拿到简介、标签、弹幕刷得最多的、热评；--listen 用本地 Whisper 听前几分钟，--frames 挑弹幕最密的时刻和换镜头的地方截图（整段都覆盖，去掉重复镜头），每 9 格拼一张图看画面。看过的打标记不重复看；被风控就歇 15 分钟。不发评论、不点赞投币。'],
+        ['做梦', on(cfg.dream), `每天 ${Math.round(cfg.dreamProb * 100)}% 会梦见`, '早上醒来有时记得昨晚的梦：拿最近刷到的、跟你聊过的事打乱了拼的，荒诞又有你。今天第一次聊天、或者发早安时，她可能顺口说一句“我昨晚梦见……”，只说一次。'],
+        ['人设成长', on(cfg.reflect), `每天 ${cfg.reflectHour} 点后回想一次（攒够 8 件事会提前）· 最多 ${cfg.selfMax} 条 · ${cfg.selfForgetDays} 天没再印证就淡忘（“最近在看” ${cfg.recentForgetDays} 天）`, '把自己找事做的日记反思成它自己的喜好、观点、最近在看的、学到的梗；又印证一次就加深。persona.md 的核心人设不动，这只是“最近的自己”。'],
+        ['深夜电台', on(cfg.radio), (() => { let n = 0; let last = ''; try { for (const d of fs.readdirSync(path.join(DATA_DIR, 'radio'), { withFileTypes: true })) { if (!d.isDirectory()) continue; for (const e of readJson(path.join(DATA_DIR, 'radio', d.name, 'episodes.json'), [])) { n++; if (e.createdAt > last) last = e.createdAt; } } } catch {} return n ? `录了 ${n} 期，最近一期 ${last.slice(5, 10)} · 一天最多 ${cfg.radioMaxDay} 期` : `还没录过 · 一天最多 ${cfg.radioMaxDay} 期`; })(), '说“开台，今晚想听点适合下雨的”“来一期开心的，别聊大道理”“今晚只听一分钟”，她就录一期两三分钟（或一分钟）的语音节目：用她自己的口气，讲她最近真刷到的事，配一张节目卡，推荐一首网易云上真搜得到的歌（歌名歌手对不上就不给链接）。“我来投稿，你帮我念”她帮你念，“上期那个话题接着讲”她接着聊，“再放一遍”不再花钱。私聊节目能用上她记得的你的事，群节目不带私事。录的时候来找她，她知道自己在录；录完聊天里也记得录过。'],
+        ['旅行明信片', on(cfg.postcard), cfg.postcard ? (() => { const t = state._trips?.cur; return t ? `这趟：${t.city}（${t.spot}）${t.sent ? '，已寄出' : ''}` : `每 ${cfg.postcardEveryWeeks} 周出去一趟`; })() : '', `隔几周的周末，她在自己的小世界里出去玩一趟（周五定去哪：厦门、青岛、大理、哈尔滨…按季节挑），周日下午给你寄一张明信片：正面用百炼画当地风景（一张一两毛钱），背面手写几句、贴邮票、盖邮戳。开着 ChronoLife 时不主动发，等你下次来聊天时她提一句再给。发 /明信片 可以马上寄一张。`],
+        ['现场照', on(cfg.photo), (() => { const n = (d) => { try { return fs.readdirSync(path.join(SCENE_DIR, d)).length; } catch { return 0; } }; return `${n('bg')} 个房间背景、${n('pose')} 个动作 · 一天最多 ${cfg.photoMaxDay} 张`; })(), `问她“在干嘛”，她可能回一张“现在的她”：按几点、你那边的天气挑她房间的样子（早上、白天、傍晚、夜里开着台灯、下雨、下雪），按她在干嘛和心情挑动作（睡觉、刷手机、听歌、吃饭、生闷气、犯困…）。图在 ${SCENE_DIR} 里（bg 房间、pose 动作）。`],
+        ['送她的东西摆进房间', on(cfg.photo), (() => { const g = readJson(path.join(SCENE_DIR, 'gifts', 'gifts.json'), []); return g.length ? `房间里：${g.slice(-3).map((x) => x.name).join('、')}` : '还没收到过'; })(), '跟着现场照一起开。你发张图或者说“送你个…”，她想收就收下：用百炼把这个东西画出来（白底，抠成透明的），摆进她的房间，马上拍一张“摆好了”给你看；以后的现场照里也能看到最近收的 3 件。她只记得你送过她什么，别人送的不会跟你提。一天最多画 3 件。'],
+      ]],
+      ['主动找你', [
+        ['ChronoLife 主动分享', cfg.chronolife && life?.settings?.proactive ? 'on' : 'off', life?.settings ? `这周发了 ${life.week}/${life.settings.weeklyMax} 条 · ${life.settings.quietStart}~${life.settings.quietEnd} 点不发 · 同一个人隔 ${life.settings.cooldownHours} 小时` : '', '开着 ChronoLife 时，主动找你只走这一条：小屋里刚有了具体内容的事（写了句什么、植物换了阶段、旅行回来），或者自己找事做时刷到你会喜欢的，她用自己的口气随口说一句，不想说就不说。只发 PROACTIVE_QQ 里的人、不发群；上一条你没回就不发下一条；你 20 分钟内刚聊过就留到聊天里说。主人私聊 /生活 主动 开 / 关。', 10],
+      ]],
+    ],
+    sections: [
+      ['它慢慢长出来的样子', `<div class="card">${selfItems.length ? `<table>${['喜好', '观点', '最近在看', '梗', '习惯'].map((k) => [k, selfItems.filter((i) => i.kind === k)]).filter(([, v]) => v.length).map(([k, v]) => `<tr><td class="n">${esc(k)}</td><td>${v.map((i) => `${esc(i.t)}${(i.seen || 1) > 1 ? ` <span class="how">×${i.seen}</span>` : ''}`).join('<br>')}</td></tr>`).join('')}</table>` : '<div class="how">还没长出来：要先有自己找事做的日记，晚上回想过才会有。</div>'}<div class="how">上次回想：${esc(when(selfProfile.lastReflectAt))} · ×N 表示被印证过 N 次</div></div>`],
+    ],
+    commands: [
+      ['/明信片', '马上寄一张旅行明信片（只在私聊）', 130],
+      ['/生活 帮助', 'ChronoLife 的命令：/生活 状态、事件、记忆、记住 内容、更正 编号 新内容、删除 编号；主人私聊还有 主动 开/关、暂停/恢复、停用/启用、兴趣 plant 2', 160],
+    ],
+    tools: [
+      ['刷 B站', `<code>node "${esc(BILI)}" hot</code> / <code>search 关键词</code> / <code>watch BV号 --listen 3 --frames 6</code> / <code>seen</code>`, 30],
+    ],
+    // 开着 ChronoLife 时这些旧的主动通道交给它管：[说明, 是否整个不单独发了]
+    taken: cfg.chronolife
+      ? {
+          '早安 / 晚安 / 冒泡': ['开着 ChronoLife：不单独发，主动找你走上面那条。', true],
+          '回访': ['开着 ChronoLife：不到点单独去问；你提过的事她还记得，聊天时会接着问。', true],
+          '主动戳你': ['开着 ChronoLife：不戳。', true],
+          '等你回': ['开着 ChronoLife：不追问。', true],
+          '被冷落有情绪': ['开着 ChronoLife：你没回不算冷落，不闹情绪。', true],
+          '每周一封信': ['开着 ChronoLife：不自动写；发 /信 照样马上写一封。', true],
+          '插嘴': ['开着 ChronoLife：群里没被叫就不插嘴。', true],
+          '电脑室友': ['开着 ChronoLife：聊天时照样知道电脑上的事，只是不因为这些主动开口。', false],
+          '纪念日和天气': ['开着 ChronoLife：上午不单独发；聊天时照样知道、会提。', false],
+          '做梦': ['开着 ChronoLife：不在早安里说，你来聊天时可能提。', false],
+        }
+      : {},
+  };
 }

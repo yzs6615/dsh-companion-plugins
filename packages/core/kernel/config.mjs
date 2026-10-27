@@ -1,6 +1,6 @@
 /**
  * 内核的配置：读 COMPANION_HOME/.env（已在环境变量里的优先），算出 cfg。各插件自己的设置在插件里挂上去。
- * bridge.mjs 和 scripts/features.mjs（功能与机制页）共用这一份，默认值只写在这里。
+ * 内核（main.mjs）和 scripts/features.mjs（功能与机制页）共用这一份，本体的默认值只写在这里；各插件的设置在插件 module.mjs 导出的 settings() 里。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -50,7 +50,7 @@ export const cfg = {
   maxAgeSec: Number(env.MAX_MESSAGE_AGE_SEC || 120),
   personaFile: env.PERSONA_FILE || path.join(HOME, 'persona.md'),
   humanSplit: (env.HUMAN_SPLIT || 'true') !== 'false',
-  botName: env.BOT_NAME || '小伴', // 启动器 / 状态窗口 / 功能页上显示的名字
+  botName: env.BOT_NAME || '小伴', // 功能页、默认人设（persona.default.md 里的 {{NAME}}）用的名字
   wakeWords: parseList(env.WAKE_WORDS || env.BOT_NAME || '小伴'), // 机器人的名字：群里叫这些词能把它叫出来，私聊点电台时也会去掉
   quietHours: (env.QUIET_HOURS || '23-9').split('-').map(Number), // 这几个钟头不出声、不留条、不发空间（各插件主动做事前看 api.quiet()）
   memoryEnabled: (env.MEMORY || 'true') !== 'false',

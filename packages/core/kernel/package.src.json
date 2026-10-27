@@ -1,13 +1,12 @@
 {
-  "name": "dsh-agent-bridge",
+  "name": "dsh-companion-kernel",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "QQ (OneBot 11 / NapCat) <-> DeepSeek Harness bridge, plus an ADB phone-control CLI",
+  "description": "dsh-companion-core 的内核：QQ (OneBot 11 / NapCat) <-> DeepSeek Harness bridge。不发布，DSH 里装的是 packages/core/package.json",
   "scripts": {
-    "start": "node bridge.mjs",
-    "test": "node test/e2e.mjs",
-    "phone": "node phone/phone.mjs",
+    "start": "node main.mjs",
+    "features": "node scripts/features.mjs",
     "napcat:config": "node napcat/setup-onebot.mjs"
   },
   "dependencies": {

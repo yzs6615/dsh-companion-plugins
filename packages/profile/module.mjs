@@ -8,10 +8,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export default function setup(api) {
-  const { cfg, env, log, state, saveState, sendRaw, reply, persona, runAgent, humanize, addDiary, myState, DATA_DIR } = api;
-  const { dayKey } = api.human;
-  Object.assign(cfg, {
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     onlineStatus: (env.ONLINE_STATUS || 'true') !== 'false', // QQ 在线状态跟着作息和心情变（睡觉中/摸鱼中/元气满满…）
     longnick: (env.LONGNICK || 'true') !== 'false', // 每晚写完日记顺手改一句个性签名
     diyStatus: (env.DIY_STATUS || 'false') === 'true', // 自定义在线状态：名字旁边写她自己的一句话（在干嘛 / 陪你听什么 / 心情），没有具体的事就用预设的
@@ -24,7 +23,13 @@ export default function setup(api) {
     qzoneHours: (env.QZONE_HOURS || '12-22').split('-').map(Number),
     qzoneRight: Number(env.QZONE_RIGHT ?? 4), // 谁能看：1 所有人，4 好友，64 仅自己
     qzoneCheckMs: Number(env.QZONE_CHECK_MS ?? 600_000),
-  });
+  };
+}
+
+export default function setup(api) {
+  const { cfg, env, log, state, saveState, sendRaw, reply, persona, runAgent, humanize, addDiary, myState, DATA_DIR } = api;
+  const { dayKey } = api.human;
+  Object.assign(cfg, settings(env, api.parseList));
   // 睡觉时段（心情和作息，mood 插件，作息被带偏时会挪）：没装就按 SLEEP_START~SLEEP_END 固定。
   // 自己找事做、ChronoLife、人设成长、现场照走她自己的生活（life 插件）给的 life / photo 服务；电脑上的事走 pc 服务（没装就当不知道）
   const sleepHour = () => api.use('mood')?.sleepHour() ?? (cfg.sleepStart + 24) % 24;
@@ -276,4 +281,23 @@ export default function setup(api) {
     api.every(cfg.qzoneCheckMs, () => checkQzone().catch(() => {}));
   }
   if (cfg.diyStatus) log('自定义在线状态: 有具体的事时名字旁边写她自己的一句话（在干嘛 / 陪你听什么 / 心情）');
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。
+ */
+export function features(cfg, { env, DATA_DIR, state, on, dayKey }) {
+  const AVATAR_DIR = env.MOOD_AVATAR_DIR ? path.resolve(env.MOOD_AVATAR_DIR) : path.join(DATA_DIR, 'avatars');
+  return {
+    groups: [
+      ['QQ 上的样子', [
+        ['在线状态和个签', on(cfg.onlineStatus || cfg.longnick), (() => { const p = state._presence || {}; return [p.name ? `现在：${p.name}` : '', p.sign ? `个签：${p.sign}` : ''].filter(Boolean).join(' · ') || '还没改过'; })(), 'QQ 在线状态跟着她过日子变：半夜睡觉中、熬夜中、自己找事做时摸鱼中、唱完歌听歌中，平时跟心情（元气满满、无聊中、想静静…）。每晚写完日记换一句个性签名（不带任何人名和私事）。'],
+        ['自定义在线状态', on(cfg.diyStatus), (() => { const n = state._presence?.name || ''; return n.startsWith('diy:') ? `现在：${n.slice(4)}` : ''; })(), 'QQ 名字旁边的状态写她自己的一句话：自己找事做时“在刷B站：…”、录电台时“在录电台”、你电脑上在放歌时“陪你听：歌名”、生气委屈时一句心情（“别惹我”）；没有具体的事、或者在睡觉，就用预设的那几种。10 分钟内不来回换，设置失败 3 次就退回预设。'],
+        ['心情头像', on(cfg.moodAvatar), (() => { const a = state._avatar || {}; const n = (() => { try { return fs.readdirSync(AVATAR_DIR).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).length; } catch { return 0; } })(); return `${n} 张图${a.name ? ` · 现在：${a.name}（${a.day === dayKey() ? `今天换了 ${a.count} 次` : '今天还没换'}）` : ''}`; })(), `她心情变了，QQ 头像跟着换成对应的图：${AVATAR_DIR} 里按名字放图（平常、开心、生气、委屈、困、睡觉、得意、烦、无聊、懒，没有的就用相近的，最后用“平常”），半夜换成“睡觉”。一天最多换 ${cfg.moodAvatarMaxDay} 次、两次至少隔 ${cfg.moodAvatarGapMin} 分钟，免得小号被风控。`],
+        ['QQ 空间说说', on(cfg.qzone), cfg.qzone ? `${{ 1: '所有人', 4: '好友', 64: '仅自己' }[cfg.qzoneRight] || cfg.qzoneRight}可见 · 一天最多一条` : '', `${cfg.qzoneHours.join('~')} 点之间偶尔发一条说说（大概两天一条），写她自己最近干的事（刷到的视频、出去玩…），有时配一张“现在的她”。只写她自己的事：不写聊天内容，写到最近聊过的人的名字、QQ 号就不发；开着 ChronoLife 时只用它记下的虚拟事件。主人私聊发 /说说 可以让她马上发一条。`],
+      ]],
+    ],
+    commands: [['/说说', '让她马上发一条 QQ 空间说说（只听主人的）', 140]],
+  };
 }
