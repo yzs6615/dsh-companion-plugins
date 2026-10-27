@@ -37,8 +37,8 @@ export default function setup(api) {
     log('电脑上的她只支持 Windows');
     return;
   }
-  // 下面这几样还在本体里（人设成长、ChronoLife 那几组还没搬），先从 api 上的过渡取值函数拿
-  const selfBlock = () => api.selfBlock();
+  // 人设成长那段在她自己的生活（life 插件）里，没装就不带
+  const selfBlock = () => api.use('life')?.selfBlock() || '';
   const pad2 = (n) => String(n).padStart(2, '0');
 
   // ── 电脑室友：她住在这台电脑里，看得见在放什么歌、开着什么游戏、电脑开了多久、人在不在电脑前（pc.mjs）───────────
