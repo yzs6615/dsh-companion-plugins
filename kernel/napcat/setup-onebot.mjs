@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Write a NapCat OneBot 11 config with a forward WebSocket server that the
- * bridge can connect to, and sync the token into ../.env.
+ * bridge can connect to, and sync the token into <COMPANION_HOME>/.env（没设 COMPANION_HOME 就是内核目录的 .env，跟 config.mjs 一样）.
  *
  *   node napcat/setup-onebot.mjs            # writes onebot11.json (template for every account)
  *   node napcat/setup-onebot.mjs 123456789  # also writes onebot11_123456789.json
  *
- * Env: ONEBOT_PORT (default 3001), ONEBOT_TOKEN (default random)
+ * Env: ONEBOT_PORT (default 3001), ONEBOT_TOKEN (default random), NAPCAT_CONFIG_DIR, COMPANION_HOME
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,7 +21,7 @@ const TOKEN = process.env.ONEBOT_TOKEN || crypto.randomBytes(12).toString('hex')
 const uin = process.argv[2] || '';
 
 if (!fs.existsSync(CONFIG_DIR)) {
-  console.error(`找不到 NapCat 配置目录: ${CONFIG_DIR}\n请先解压 NapCat.Shell.Windows.Node.zip 到 tools/napcat/app。`);
+  console.error(`找不到 NapCat 配置目录: ${CONFIG_DIR}\n请先解压 NapCat.Shell.Windows.Node.zip 到 tools/napcat/app，或者用 NAPCAT_CONFIG_DIR 指到 NapCat 的 config 目录。`);
   process.exit(1);
 }
 
@@ -62,7 +62,7 @@ for (const file of targets) {
 }
 
 // Sync token into the bridge's .env (leave everything else untouched).
-const envFile = path.join(ROOT, '.env');
+const envFile = path.join(process.env.COMPANION_HOME ? path.resolve(process.env.COMPANION_HOME) : ROOT, '.env');
 if (fs.existsSync(envFile)) {
   const next = fs
     .readFileSync(envFile, 'utf8')
@@ -74,4 +74,4 @@ if (fs.existsSync(envFile)) {
 }
 
 console.log(`\nOneBot WS: ws://127.0.0.1:${PORT}  token: ${TOKEN}`);
-console.log('接着：启动 NapCat 并用手机 QQ 扫码登录 → 运行 `node bridge.mjs`。');
+console.log('接着：启动 NapCat 并用手机 QQ 扫码登录 → 重启 DSH（在仓库里开发就运行 `node bridge.mjs`）。');
