@@ -46,8 +46,10 @@ export default function setup(api) {
   // 长期事实（记得你，memory）还在本体，本体就地给了 facts 服务；没有就当什么都不记得
   const readFacts = (chatKey) => api.use('facts')?.readFacts(chatKey) || { facts: [], followups: [], style: [] };
   const writeFacts = (chatKey, data) => api.use('facts')?.writeFacts(chatKey, data);
-  // 下面这几样还在本体里（做梦、学某人、纪念日、日记、现场照那几组还没搬），先从 api 上的过渡取值函数拿
-  const { selfBlock, takeDream, mimicBlock, specialToday, journalDays, readJournal } = api;
+  // 学某个人说话那段（说话的样子，speech 插件）：没装就不带
+  const mimicBlock = () => api.use('mimic')?.block() || '';
+  // 下面这几样还在本体里（做梦、纪念日、日记、现场照那几组还没搬），先从 api 上的过渡取值函数拿
+  const { selfBlock, takeDream, specialToday, journalDays, readJournal } = api;
   const shortDay = (d) => d.slice(5);
 
   /** 让模型自己写主动消息：带记忆、带时间，能分享点东西。不再有固定模板兜底。 */
