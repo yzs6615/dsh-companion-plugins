@@ -10,6 +10,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "LICENSE",
     "README.md",
     "cordis.patch.yml",
     "index.js",

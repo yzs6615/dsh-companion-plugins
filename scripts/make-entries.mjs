@@ -14,6 +14,8 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 for (const p of PLUGINS) {
   const dir = path.join(ROOT, 'packages', p.id)
   fs.mkdirSync(dir, { recursive: true })
+  // 许可证每个包各带一份（npm 打包只认包目录里的 LICENSE）
+  fs.copyFileSync(path.join(ROOT, 'LICENSE'), path.join(dir, 'LICENSE'))
   // 包里放哪些：DSH 要的入口文件一定放（这时候可能还没写出来），再加上目录里别的东西
   const files = [...new Set(['index.js', 'cordis.patch.yml', 'README.md', ...(p.id === 'core' ? [] : ['module.mjs']), ...fs.readdirSync(dir).filter((f) => !['package.json', 'node_modules'].includes(f))])]
   const pkg = {
