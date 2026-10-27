@@ -4,17 +4,23 @@
  * 设置：GROUP_QUOTE、GROUP_FOLLOW_SEC、POKE、CHIME_PROB / CHIME_COOLDOWN_MIN / CHIME_MAX_DAY。
  * 群白名单（ALLOWED_GROUPS）、叫它的名字（WAKE_WORDS，不写就用 BOT_NAME）、群聊近况缓冲、撤回还在本体里。
  */
-export default function setup(api) {
-  const { cfg, env, log, pick, sleep, reply, say, sendRaw, persona, runAgent, runQueued, humanize, textOf, senderName, recordGroup, groupContext, mentions, quotesMe, activeChats } = api;
-  const { dayKey, selfState, chimeWeight } = api.human;
-  Object.assign(cfg, {
+
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     groupQuote: (env.GROUP_QUOTE || 'true') !== 'false',
     groupFollowSec: Number(env.GROUP_FOLLOW_SEC ?? 45), // @ 过之后，同一个人接着说不用再 @
     poke: (env.POKE || 'true') !== 'false',
     chimeProb: Number(env.CHIME_PROB ?? 0.03), // 群里没被叫也插嘴的基础概率，0 关闭
     chimeCooldownMin: Number(env.CHIME_COOLDOWN_MIN ?? 20),
     chimeMaxDay: Number(env.CHIME_MAX_DAY ?? 6),
-  });
+  };
+}
+
+export default function setup(api) {
+  const { cfg, env, log, pick, sleep, reply, say, sendRaw, persona, runAgent, runQueued, humanize, textOf, senderName, recordGroup, groupContext, mentions, quotesMe, activeChats } = api;
+  const { dayKey, selfState, chimeWeight } = api.human;
+  Object.assign(cfg, settings(env, api.parseList));
 
   const engaged = new Map(); // "群:人" -> 上次跟它说上话的时间，用来判断“还在跟我说”
   // 在群里回过谁，就记一笔（排在最后：等唱歌、表情包这些都发完再记，跟原来一样）
@@ -134,4 +140,23 @@ export default function setup(api) {
       }
     }).catch(() => {});
   }
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。没装这个插件就没有“群聊”这组（群消息一概不理）。
+ */
+export function features(cfg, { pct, on }) {
+  const groups = cfg.allowedGroups.length;
+  return {
+    groups: [
+      ['群聊', [
+        ['群白名单', groups ? 'on' : 'off', groups ? `${groups} 个群` : '没配 ALLOWED_GROUPS，群消息一律不理', '只有白名单里的群会被理会。'],
+        ['唤醒', groups ? 'on' : 'idle', `@ 它，或叫 ${cfg.wakeWords.join(' / ')} · 叫过后 ${cfg.groupFollowSec}s 内接着说不用再叫`, ''],
+        ['引用回复', groups && cfg.groupQuote ? 'on' : groups ? 'off' : 'idle', '群里聊开了就引用原消息，等太久会 @', ''],
+        ['插嘴', groups && cfg.chimeProb > 0 ? 'on' : cfg.chimeProb > 0 ? 'idle' : 'off', `基础 ${pct(cfg.chimeProb)}，每群冷却 ${cfg.chimeCooldownMin} 分钟、每天最多 ${cfg.chimeMaxDay} 次`, '没被叫时偶尔接一句；这一路只给只读权限、不给工具。'],
+        ['戳一戳', on(cfg.poke), '按一分钟内被戳次数换说法，40% 戳回去', '不调模型。私聊和白名单群都有效。'],
+      ]],
+    ],
+  };
 }
