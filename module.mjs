@@ -25,8 +25,15 @@ export default function setup(api) {
     qzoneRight: Number(env.QZONE_RIGHT ?? 4), // 谁能看：1 所有人，4 好友，64 仅自己
     qzoneCheckMs: Number(env.QZONE_CHECK_MS ?? 600_000),
   });
-  // 下面这几样还在本体里（心情和作息、自己找事做、ChronoLife 那几组还没搬），先从 api 上的过渡取值函数拿；电脑上的事走 pc 服务（没装就当不知道）
-  const { inSleepHours, sleepHour } = api;
+  // 睡觉时段（心情和作息，mood 插件，作息被带偏时会挪）：没装就按 SLEEP_START~SLEEP_END 固定。
+  // 自己找事做、ChronoLife 那几组还在本体里，先从 api 上的过渡取值函数拿；电脑上的事走 pc 服务（没装就当不知道）
+  const sleepHour = () => api.use('mood')?.sleepHour() ?? (cfg.sleepStart + 24) % 24;
+  const wakeHour = () => api.use('mood')?.wakeHour() ?? (cfg.sleepEnd + 24) % 24;
+  function inSleepHours(h = new Date().getHours()) {
+    const a = sleepHour();
+    const b = wakeHour();
+    return a <= b ? h >= a && h < b : h >= a || h < b;
+  }
   // 跟本体里的一样：ChronoLife 的活动名去掉“虚拟”两个字
   const unVirtual = (t) => String(t || '').replace(/虚拟的?/g, '');
 
