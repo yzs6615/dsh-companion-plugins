@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseWav, makeWav } from './tts.mjs';
+import { parseWav, makeWav } from './wav.mjs';
 import { speakable } from './human.mjs';
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];

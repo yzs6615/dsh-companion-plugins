@@ -82,29 +82,10 @@ export const cfg = {
   factsEvery: Number(env.FACTS_EVERY ?? 6),
   react: (env.REACT || 'true') !== 'false', // “嗯嗯/哈哈”点表情回应，不调模型
   reactProb: Number(env.REACT_PROB ?? 0.7),
-  learnStyle: (env.LEARN_STYLE || 'true') !== 'false', // 学对方的口头禅/说话习惯（跟长期事实一起提炼，不多花调用）
-  stealStickers: (env.STEAL_STICKERS || 'true') !== 'false', // 对方发的表情包，觉得好玩就收进自己的表情库
-  stealMax: Number(env.STEAL_MAX ?? 40), // 每种情绪最多留几张收来的
   ignoreLimit: Number(env.IGNORE_LIMIT ?? 2), // 主动找了几次都没回，就先不找了（等对方开口）
   sulk: (env.SULK || 'true') !== 'false', // 被冷落后对方再开口，第一句带点小情绪
   sulkAfterMin: Number(env.SULK_AFTER_MIN ?? 120), // 主动消息发出后隔多久才回算“被冷落”
   reflect: (env.REFLECT || 'true') !== 'false', // 生活 → 反思 → 人设成长
-  mimic: (env.MIMIC || 'true') !== 'false', // 合并转发聊天记录给它，学某个人的说话风格
-  mimicRampDays: Number(env.MIMIC_RAMP_DAYS ?? 14), // 多少天学到位（慢慢带进语气）
-  // 语音：阿里云百炼 CosyVoice 复刻音色。填了 VOICE_ID + DASHSCOPE_API_KEY 才会开
-  voice: (env.VOICE || 'true') !== 'false' && !!env.VOICE_ID && !!env.DASHSCOPE_API_KEY,
-  voiceId: env.VOICE_ID || '',
-  voiceModel: env.VOICE_MODEL || 'cosyvoice-v3.5-flash',
-  voiceMaxChars: Number(env.VOICE_MAX_CHARS ?? 60), // 超过这么多字就还是打字
-  voiceMaxDay: Number(env.VOICE_MAX_DAY ?? 20), // 一天最多发几条语音（自己想发的，/说话 不算）
-  voiceCutMs: Number(env.VOICE_CUT_MS ?? 0), // 句尾固定再剪掉多少毫秒（自动去杂音之外）
-  voiceRate: Number(env.VOICE_RATE ?? 1), // 语速 0.5–2
-  voiceEmotion: (env.VOICE_EMOTION || 'true') !== 'false', // 语音带语气：[语音:害怕] 她自己点，或者跟着有来由的心情（生气、委屈…）；开心没做
-  voiceEmotionDb: Number(env.VOICE_EMOTION_DB ?? -20), // 带语气的语音最响到多少（有声部分平均 dBFS；平常的语音大约 -25）
-  voiceWs: env.DASHSCOPE_WS || undefined, // 测试时指向假的合成服务
-  // 唱歌：data/songs/<歌名>/ 里提前转好的片段（sing/render.py 生成），发 QQ 语音
-  sing: (env.SING || 'true') !== 'false',
-  singMaxDay: Number(env.SING_MAX_DAY ?? 6), // 一天最多唱几段（/唱歌 命令不算）
   // 深夜电台：点一期，她录两三分钟的语音节目（节目卡 + 推荐一首歌）。没开语音就发文字版
   radio: (env.RADIO || 'true') !== 'false',
   radioMaxDay: Number(env.RADIO_MAX_DAY ?? 6), // 一天最多录几期（重播不算）
