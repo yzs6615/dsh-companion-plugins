@@ -93,7 +93,7 @@ export default function setup(api) {
       const ignored = userState(qq).ignored || 0;
       const ignoredNote = ignored ? `\n你上次主动找对方，对方到现在还没回。别装没事人一样热情，可以带点“又不理我”的小别扭，但别抱怨个没完。` : '';
       const prompt = `${persona()}${lifeBlock(qq)}${selfBlock()}${mimicBlock()}\n\n---\n${scene}。${ignoredNote}${factBlock}\n你记得最近聊过：\n${mem || '（没什么印象）'}\n\n像真人突然发消息：1-2 句，可以分享你刚看到/想到/正在忙的一件事，或者接着上次的话题问一句。不要客服腔，不要问“需要我做什么”，不要列清单。只输出要发的话。`;
-      const r = await runAgent(prompt, null);
+      const r = await runAgent(prompt, null, { permissionMode: 'read-only' }); // 主动消息只要一句话，不用工具
       return humanize(r.text).trim();
     } catch (err) {
       log(`主动消息生成失败: ${err.message}`);
@@ -391,20 +391,17 @@ export default function setup(api) {
     }
   }
 
-  // /信：马上写一封（算这周的）。原来在“对方开口”之前，所以挂 message:command
-  api.on('message:command', async (ev, text) => {
-    if (text !== '/信' && text !== '/写信') return false;
-    if (!cfg.letter || ev.message_type === 'group') {
-      await reply(ev, cfg.letter ? '信私聊写' : '还没学会写信');
-      return true;
-    }
-    if (letterRunning) {
-      await reply(ev, '在写了 别催');
-      return true;
-    }
+  /** 写信（/信 或者大白话 [写信]）。大白话的她已经回过“等我写写”了，natural 就不再说；办不成照样补一句。 */
+  async function startLetter(ev, natural = false) {
+    const no = async (line, why) => {
+      if (natural) log(`大白话写信：没写（${why}）`); // 大白话的她已经答应了，办不成也得补一句
+      await reply(ev, line);
+    };
+    if (!cfg.letter || ev.message_type === 'group') return void (await no(cfg.letter ? '信私聊写' : '还没学会写信', cfg.letter ? '群里不写' : '没开写信'));
+    if (letterRunning) return void (await no('在写了 别催', '正在写'));
     letterRunning = true;
     try {
-      await reply(ev, pick(['等我写写', '行 给你写一封', '写信得酝酿一下 等着']));
+      if (!natural) await reply(ev, pick(['等我写写', '行 给你写一封', '写信得酝酿一下 等着']));
       userState(ev.user_id).letterWeek = weekKey(); // 算这周的
       saveState();
       await writeLetter(ev.user_id, ev);
@@ -414,8 +411,21 @@ export default function setup(api) {
     } finally {
       letterRunning = false;
     }
+  }
+  // /信：马上写一封（算这周的）。原来在“对方开口”之前，所以挂 message:command
+  api.on('message:command', async (ev, text) => {
+    if (text !== '/信' && text !== '/写信') return false;
+    await startLetter(ev);
     return true;
   });
+  // 大白话：对方说“给我写封信”，她回复里写 [写信]（本体抠掉标记，回完这句交到这里）；写信要好一会儿，不占着这个聊天
+  api.on('natural:act', (ev, a) => {
+    if (a.kind !== '写信') return false;
+    startLetter(ev, true).catch((err) => log(`写信失败: ${err.message}`));
+    return true;
+  });
+  api.on('natural:hint', (t) => (!t.isGroup && cfg.letter ? '\n- 对方想让你给 TA 写封信：写 [写信]，先回一句（比如“行 等我写写”），写好了会发过去。' : ''), 30);
+  api.on('help', (ev) => (ev.message_type !== 'group' && cfg.letter ? '\n· “给我写封信”' : ''), 100);
 
   // ── 定时和启动日志（原来在 main 段末尾）────────────────────────────────────
   // 回访要看长期事实开没开：cfg.facts 是记得你（memory 插件）挂上的，插件加载有先后，这里还不一定有，
@@ -456,9 +466,10 @@ export function features(cfg, { on }) {
         ['回访', on(cfg.followup && cfg.facts && cfg.proactive), `${cfg.followupHours.join('–')} 点 · 只找 ${cfg.proactiveQQ.join(', ') || '（没配 PROACTIVE_QQ）'} · 隔 2 小时以上`, '对方提到将来的事（考试、面试…），事后到点顺口问一句；超过 36 小时就不问了。', 30],
         ['主动戳你', on(cfg.pokeSelf), '一天最多一次', `白天你 ${cfg.pokeSelfIdleMin} 分钟以上没动静、她没在睡觉的时候，偶尔在 QQ 里戳你一下，什么都不说；无聊、嘴贫的时候更想戳。戳完会记进日记，你问“戳我干嘛”她对得上。`, 40],
         ['等你回', on(cfg.chase), `问了没回 ${cfg.chaseMinMin}~${cfg.chaseMaxMin} 分钟后 ${Math.round(cfg.chaseProb * 100)}% 会追一句`, '她问了你一句、你半天没回，偶尔追一句“人呢”“？”，熟了会说“已读不回是吧”；一个问题最多追一次。你说了去洗澡、睡了、上课这种就不追，半夜也不追。', 50],
-        ['每周一封信', on(cfg.letter), `每周${'日一二三四五六'[cfg.letterWeekday] || '日'} ${cfg.letterHour} 点后`, '每周给你写一封信，聊聊这一周你们之间的事：信纸用百炼通义万相画（按季节换花样，不写字，一张一两毛钱），字用手写体排上去，角上盖个小章；画不成就用素纸。发 /信 可以马上写一封（算这周的）。', 60],
+        ['每周一封信', on(cfg.letter), `每周${'日一二三四五六'[cfg.letterWeekday] || '日'} ${cfg.letterHour} 点后`, '每周给你写一封信，聊聊这一周你们之间的事：信纸用百炼通义万相画（按季节换花样，不写字，一张一两毛钱），字用手写体排上去，角上盖个小章；画不成就用素纸。跟她说“给我写封信”（或发 /信）可以马上写一封（算这周的）。', 60],
       ]],
     ],
+    natural: [['“给我写封信”', cfg.letter ? '马上写一封信（算这周的；只在私聊）' : '没开写信', 100]],
     commands: [['/信', '马上给你写一封信（算这周的；只在私聊）', 120]],
   };
 }
