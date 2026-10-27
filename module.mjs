@@ -16,7 +16,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export default function setup(api) {
   const { cfg, env, log, state, saveState, userState, closeness, persona, lifeBlock, readMemory, appendMemory, addDiary } = api;
-  const { reply, say, sendRaw, sendMsg, runAgent, runPyJson, humanize, activeChats, batches, myState, inSleepHours, pick, sleep, pace, DATA_DIR } = api;
+  const { reply, say, sendRaw, sendMsg, runAgent, runPyJson, humanize, activeChats, batches, myState, pick, sleep, pace, DATA_DIR } = api;
   const { dayKey, familiarity, askedSomething, isLeaving, parseJsonLoose } = api.human;
   Object.assign(cfg, {
     proactive: (env.PROACTIVE || 'false') === 'true',
@@ -52,6 +52,14 @@ export default function setup(api) {
   const specialToday = (qq) => api.use('anniversary')?.today(qq) || '';
   const journalDays = () => api.use('journal')?.days() || [];
   const readJournal = (d) => api.use('journal')?.read(d) ?? null;
+  // 睡觉时段（心情和作息，mood 插件，作息被带偏时会挪）：没装就按 SLEEP_START~SLEEP_END 固定
+  function inSleepHours(h = new Date().getHours()) {
+    const m = api.use('mood');
+    if (m) return m.inSleepHours(h);
+    const a = (cfg.sleepStart + 24) % 24;
+    const b = (cfg.sleepEnd + 24) % 24;
+    return a <= b ? h >= a && h < b : h >= a || h < b;
+  }
   // 下面这几样还在本体里（人设成长、做梦、现场照那几组还没搬），先从 api 上的过渡取值函数拿
   const { selfBlock, takeDream } = api;
   const shortDay = (d) => d.slice(5);
