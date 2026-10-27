@@ -31,8 +31,6 @@ import {
   makeTypo,
   ackKind,
   looksLikeQuestion,
-  askedSomething,
-  isLeaving,
   chooseActivity,
   extractMoodTag,
   moodHours,
@@ -338,6 +336,8 @@ function readFacts(chatKey) {
     style: Array.isArray(f?.style) ? f.style.filter(x => !chronoAdapter || chronoAdapter.filter(chatKey, x.t) === x.t) : [], // 对方的口头禅 / 说话习惯（学说话用）
   };
 }
+// 还没搬走的：长期事实先就地当 facts 服务给出去（回访、写信要用），搬“记得你”（memory）时把这行挪进 memory 插件
+provide('facts', { readFacts, writeFacts });
 function writeFacts(chatKey, data) {
   try {
     fs.mkdirSync(MEMORY_DIR, { recursive: true });
@@ -1030,7 +1030,6 @@ on('message:seen', (ev) => {
     const st0 = userState(ev.user_id);
     if (!st0.metDay) st0.metDay = dayKey(); // 第一次说话：认识的日子
   }
-  if (ev.message_type !== 'group') pendingAsk.delete(`u${ev.user_id}`); // 回了：不用追了
   if (ev.message_type !== 'group' && cfg.allowedQQ.includes(String(ev.user_id))) noteFirstToday(ev.user_id);
 });
 on('help', () => (cfg.radio ? '\n想听电台就说“开台，聊聊下雨天”（/电台 帮助 看玩法）' : ''));
@@ -1895,35 +1894,6 @@ async function captionSticker(rel, file) {
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
-/** 让模型自己写主动消息：带记忆、带时间，能分享点东西。不再有固定模板兜底。 */
-async function genProactive(qq, kind, extra = '') {
-  if (cfg.proactiveLLM === false) return '';
-  try {
-    const mem = readMemory(`u${qq}`);
-    const facts = cfg.facts ? readFacts(`u${qq}`).facts.slice(-20) : [];
-    const dream = kind === 'morning' ? takeDream(`u${qq}`) : '';
-    const scene =
-      kind === 'morning'
-        ? `早上，主动发句早安${dream ? `；你昨晚做了个梦（你自己的梦）：${dream}——想说就顺口提一句` : ''}`
-        : kind === 'night'
-          ? '晚上，主动说句晚安'
-          : kind === 'followup'
-            ? `你想起一件事，顺口问一句：${extra}`
-            : kind === 'special'
-              ? `今天是个日子（${extra}），主动跟对方说一句。像真人那样随口提，别写成贺卡、别太煽情`
-              : '对方半天没动静，主动冒个泡';
-    const factBlock = facts.length ? `\n你记得关于对方的事：\n${facts.map((f) => `- ${f.t}`).join('\n')}` : '';
-    const ignored = userState(qq).ignored || 0;
-    const ignoredNote = ignored ? `\n你上次主动找对方，对方到现在还没回。别装没事人一样热情，可以带点“又不理我”的小别扭，但别抱怨个没完。` : '';
-    const prompt = `${persona()}${lifeBlock(qq)}${selfBlock()}${mimicBlock()}\n\n---\n${scene}。${ignoredNote}${factBlock}\n你记得最近聊过：\n${mem || '（没什么印象）'}\n\n像真人突然发消息：1-2 句，可以分享你刚看到/想到/正在忙的一件事，或者接着上次的话题问一句。不要客服腔，不要问“需要我做什么”，不要列清单。只输出要发的话。`;
-    const r = await runAgent(prompt, null);
-    return humanize(r.text).trim();
-  } catch (err) {
-    log(`主动消息生成失败: ${err.message}`);
-    return '';
-  }
-}
-
 let factsRunning = false;
 /** 隔几轮把聊天提炼成长期事实 + 回访事项（后台跑，不挡回复）。 */
 async function extractFacts(chatKey) {
@@ -1997,131 +1967,11 @@ function maybeExtractFacts(chatKey, userText) {
   }
 }
 
-/** 到点的回访：顺口问一句“考得怎么样”。只找 PROACTIVE_QQ 里的人，睡觉时段不打扰。 */
-async function checkFollowups() {
-  if (cfg.chronolife) return;
-  if (!cfg.followup || !cfg.facts || !cfg.proactive || !ws || ws.readyState !== 1) return;
-  const hour = new Date().getHours();
-  const [from, to] = cfg.followupHours;
-  if (hour < from || hour >= to) return;
-  const now = Date.now();
-  for (const qq of cfg.proactiveQQ) {
-    const chatKey = `u${qq}`;
-    const data = readFacts(chatKey);
-    const item = data.followups.find((f) => !f.done && f.due <= now);
-    if (!item) continue;
-    if (now - item.due > 36 * 3600_000) {
-      item.done = true; // 过了太久，再问就尬了
-      writeFacts(chatKey, data);
-      continue;
-    }
-    const st = userState(qq);
-    if ((st.ignored || 0) >= cfg.ignoreLimit) continue; // 找了几次都没理：先别烦人家，等对方开口
-    if (now - (st.lastUserAt || 0) < cfg.followupIdleSec * 1000) continue; // 正聊着，等会儿
-    if (now - (st.lastProactiveAt || 0) < 2 * 3600_000) continue;
-    const text = await genProactive(qq, 'followup', item.ask);
-    item.tries = (item.tries || 0) + 1;
-    if (text || item.tries >= 3) item.done = true; // 生成失败最多重试 3 次，别每两分钟烧一次模型
-    writeFacts(chatKey, data);
-    if (!text) continue;
-    try {
-      pendingAsk.delete(`u${qq}`);
-      await say({ message_type: 'private', user_id: Number(qq) }, text);
-      st.lastProactiveAt = Date.now();
-      st.ignored = (st.ignored || 0) + 1;
-      saveState();
-      log(`回访 ${qq}: ${item.ask} -> ${text.slice(0, 60)}`);
-    } catch (err) {
-      log(`回访失败 ${qq}: ${err.message}`);
-    }
-  }
-}
 async function sendPrivate(qq, text) {
   return sendRaw({
     action: 'send_private_msg',
     params: { user_id: Number(qq), message: [{ type: 'text', data: { text } }] },
   });
-}
-
-/** 低频主动找人：早安、晚安、消失太久时冒个泡。默认关闭，用 PROACTIVE 开。 */
-async function checkProactive() {
-  if (cfg.chronolife) return;
-  if (!cfg.proactive || !cfg.proactiveQQ.length || !ws || ws.readyState !== 1) return;
-  const now = new Date();
-  const hour = now.getHours();
-  if (hour < 8 || hour >= 23) return;
-  const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  for (const qq of cfg.proactiveQQ) {
-    const st = userState(qq);
-    if (st.day !== day) {
-      st.day = day;
-      st.count = 0;
-    }
-    // 认识 N 天 / 周年 / 生日：9 点后说一句（一天一次，不受“被冷落”限制）
-    const special = specialToday(qq);
-    if (special && st.specialDay !== day && hour >= 9) {
-      st.specialDay = day;
-      saveState();
-      const t = await genProactive(qq, 'special', special);
-      if (t) {
-        try {
-          await say({ message_type: 'private', user_id: Number(qq) }, t);
-          st.lastProactiveAt = Date.now();
-          st.count += 1;
-          saveState();
-          log(`主动私聊 ${qq}（${special}）: ${t}`);
-        } catch (err) {
-          log(`主动私聊失败 ${qq}: ${err.message}`);
-        }
-        continue;
-      }
-    }
-    if (st.count >= cfg.proactiveMax) continue;
-    if ((st.ignored || 0) >= cfg.ignoreLimit) continue; // 找了几次都没理：先别烦人家，等对方开口
-    if (Date.now() - st.lastProactiveAt < 6 * 3600_000) continue;
-    let text = '';
-    if (hour < 10) {
-      // 早上只掷一次骰子：今天到底想不想说早安。
-      if (st.morningDay !== day) {
-        st.morningDay = day;
-        st.morningSent = false; // 每天重新来（以前忘了清零：发过一次早安就再也不发了）
-        st.morningRoll = Math.random() < 0.55;
-        log(`早安骰子 ${qq}: ${st.morningRoll ? '说' : '今天不说'}`);
-      }
-      if (st.morningRoll && !st.morningSent) {
-        text = await genProactive(qq, 'morning');
-        st.morningSent = true;
-      }
-    } else if (hour >= 22) {
-      if (st.nightDay !== day) {
-        st.nightDay = day;
-        st.nightSent = false;
-        st.nightRoll = Math.random() < 0.5;
-        log(`晚安骰子 ${qq}: ${st.nightRoll ? '说' : '今天不说'}`);
-      }
-      if (st.nightRoll && !st.nightSent) {
-        text = await genProactive(qq, 'night');
-        st.nightSent = true;
-      }
-    } else if (
-      Date.now() - (st.lastUserAt || 0) > cfg.proactiveIdleHours * 3600_000 &&
-      Math.random() < 0.08
-    ) {
-      text = await genProactive(qq, 'idle');
-    }
-    if (!text) continue;
-    try {
-      pendingAsk.delete(`u${qq}`);
-      await say({ message_type: 'private', user_id: Number(qq) }, text);
-      st.lastProactiveAt = Date.now();
-      st.count += 1;
-      st.ignored = (st.ignored || 0) + 1;
-      saveState();
-      log(`主动私聊 ${qq}: ${text}`);
-    } catch (err) {
-      log(`主动私聊失败 ${qq}: ${err.message}`);
-    }
-  }
 }
 
 // ── 心情有来由、会延续 ───────────────────────────────────────────────────
@@ -2244,69 +2094,6 @@ function busyBlock() {
   return `\n\n---\n你这会儿正在${doing.name}（${min} 分钟了），对方来找你了：可以说一句在干嘛（比如“等下 在${doing.name}呢”），也可以直接陪对方聊。`;
 }
 
-// ── 主动戳你一下 ──────────────────────────────────────────────────────────
-// 白天、对方一阵子没动静、她没在睡觉，偶尔在 QQ 里戳对方一下，什么都不说；一天最多一次。无聊、嘴贫的时候更想戳。
-async function checkPokeSelf() {
-  if (cfg.chronolife) return;
-  if (!cfg.pokeSelf || !cfg.proactiveQQ.length || !ws || ws.readyState !== 1 || inSleepHours()) return;
-  const qq = cfg.proactiveQQ[0];
-  const st = userState(qq);
-  const today = dayKey();
-  if (st.pokedDay === today || (st.ignored || 0) >= cfg.ignoreLimit) return;
-  if (Date.now() - Math.max(st.lastUserAt || 0, st.lastProactiveAt || 0) < cfg.pokeSelfIdleMin * 60_000) return;
-  const mood = myState().mood;
-  const p = cfg.pokeSelfProb * (mood === '无聊' || mood === '嘴贫' ? 2 : mood === '困' || mood === '有点丧' ? 0.5 : 1);
-  if (Math.random() >= p) return;
-  st.pokedDay = today;
-  saveState();
-  try {
-    await sendRaw({ action: 'send_poke', params: { user_id: String(qq) } });
-    addDiary(mood === '无聊' ? '无聊，戳了对方一下' : '突然想戳对方一下，就戳了');
-    log(`戳你：${qq}（${mood}）`);
-  } catch (err) {
-    log(`戳你失败: ${err.message}`);
-  }
-}
-
-// ── 等你回：她问了一句，对方半天没回，偶尔追一句“人呢” ─────────────────────────
-// 只在私聊；对方刚说了要去洗澡/睡了/上课这种就不追；睡觉时段不追；一个问题最多追一次。
-const pendingAsk = new Map(); // chatKey -> { qq, due }
-function noteAsk(ev, chatKey, userText, spoken) {
-  if (cfg.chronolife) return;
-  if (!cfg.chase || ev.message_type === 'group') return;
-  if (!askedSomething(spoken) || isLeaving(userText)) {
-    pendingAsk.delete(chatKey);
-    return;
-  }
-  const span = Math.max(0, cfg.chaseMaxMin - cfg.chaseMinMin);
-  pendingAsk.set(chatKey, { qq: ev.user_id, due: Date.now() + (cfg.chaseMinMin + Math.random() * span) * 60_000 });
-}
-async function checkChase() {
-  if (cfg.chronolife) return;
-  for (const [k, p] of [...pendingAsk]) {
-    if (Date.now() < p.due) continue;
-    pendingAsk.delete(k);
-    if (inSleepHours() || activeChats.has(k) || batches.has(k)) continue;
-    if (Math.random() >= cfg.chaseProb) {
-      log(`等你回：${p.qq} 没回，这次不追了`);
-      continue;
-    }
-    const h = new Date().getHours();
-    const tier = familiarity(closeness(userState(p.qq))).tier;
-    const lines = ['人呢', '？', '嗯？', '人呢人呢', '说话', '又跑了'];
-    if (h >= 22 || h < 2) lines.push('睡了？', '人呢 睡着了？');
-    if (tier === '熟' || tier === '很熟') lines.push('不理我是吧', '已读不回是吧', '喂');
-    const line = pick(lines);
-    try {
-      await reply({ message_type: 'private', user_id: Number(p.qq) }, line);
-      appendMemory(k, '（半天没回）', line);
-      log(`等你回：${p.qq} 半天没回，追了一句`);
-    } catch (err) {
-      log(`等你回发送失败: ${err.message}`);
-    }
-  }
-}
-
 let autonomyRunning = false;
 // 自己找事做：每次先挑一件想干的事（别老刷 B站）。跟上一次的错开，今天干过的越多越不想再干。
 const ACTIVITIES = [
@@ -2407,7 +2194,7 @@ async function checkAutonomy() {
       log(`自主活动：想分享，但对方已经 ${st.ignored} 次没理了，忍住没发`);
       return;
     }
-    pendingAsk.delete(`u${qq}`);
+    use('proactive')?.clearAsk(`u${qq}`); // 发了新的就不用再追上一句“人呢”了（主动找你插件，没装就跳过）
     await say({ message_type: 'private', user_id: Number(qq) }, text);
     st.ignored = (st.ignored || 0) + 1;
     saveState();
@@ -2793,23 +2580,6 @@ async function handleEvent(ev) {
     const j = d ? readJournal(d) : null;
     const mine = j?.with?.[chatKey] ? `\n跟你：${j.with[chatKey]}` : '';
     await reply(ev, j ? `${shortDay(d)}\n${j.day}${mine}` : '还没写过日记', { whole: true });
-    return;
-  }
-  if (text === '/信' || text === '/写信') {
-    if (!cfg.letter || ev.message_type === 'group') return void (await reply(ev, cfg.letter ? '信私聊写' : '还没学会写信'));
-    if (letterRunning) return void (await reply(ev, '在写了 别催'));
-    letterRunning = true;
-    try {
-      await reply(ev, pick(['等我写写', '行 给你写一封', '写信得酝酿一下 等着']));
-      userState(ev.user_id).letterWeek = weekKey(); // 算这周的
-      saveState();
-      await writeLetter(ev.user_id, ev);
-    } catch (err) {
-      log(`写信失败: ${err.message}`);
-      await reply(ev, '没写出来 改天再写');
-    } finally {
-      letterRunning = false;
-    }
     return;
   }
   if (text === '/明信片') {
@@ -3226,16 +2996,19 @@ on('turn:after', async (t) => {
   withLife(() => { if (chrono.settings().enabled) chrono.record_interaction({ id: `qq:${chatKey}:${ids?.join('-') || Date.now()}:out`, scope: chatKey, text: spoken.slice(0, 2000) || '（表情）', direction: 'out' }); });
   if (t.tags.photo && cfg.photo && !isGroup) await sendScenePhoto(ev).catch((err) => log(`现场照失败: ${err.message}`));
 }, 10);
-// 原来是一个钩子：现场照 → 放歌 → 收礼物、明信片、等你回、电台。放歌搬进了 pc 插件（order 20），这里拆成 10 和 30，先后不变
+// 原来是一个钩子：现场照 → 放歌 → 收礼物、明信片、等你回、电台。放歌搬进了 pc 插件（order 20），等你回搬进了 proactive 插件（order 35），
+// 这里拆成 10、30 和 40，先后不变
 on('turn:after', async (t) => {
-  const { ev, chatKey, spoken, isGroup, text } = t;
+  const { ev, isGroup } = t;
   if (t.tags.gift && cfg.photo && !isGroup) receiveGift(ev, t.tags.gift).catch((err) => log(`收礼物没成: ${err.message}`)); // 画要半分钟，不占着这个聊天
   if (t.giveCard && t.trip.pending === t.giveCard) {
     t.trip.pending = null;
     saveState();
     await givePostcard(ev, t.giveCard, t.trip).catch((err) => log(`明信片没给成: ${err.message}`));
   }
-  noteAsk(ev, chatKey, text, spoken);
+}, 30);
+on('turn:after', async (t) => {
+  const { ev, chatKey, text } = t;
   if (t.tags.radio && cfg.radio) {
     let req = t.tags.radio;
     if (req.submit && !req.submission) {
@@ -3244,7 +3017,7 @@ on('turn:after', async (t) => {
     }
     startRadio(ev, req, { ack: false, chatKey, who: senderName(ev), uid: ev.user_id, userText: text, mood: myState(chatKey).mood });
   }
-}, 30);
+}, 40);
 on('turn:after', (t) => maybeExtractFacts(t.chatKey, t.text), 90);
 
 // ── 做梦：早上醒来有时记得昨晚的梦（最近的事打乱了拼的），今天第一次聊天、或者早安时顺口说一句 ─────────────
@@ -3423,99 +3196,8 @@ async function sendScenePhoto(ev) {
   return true;
 }
 
-// ── 每周一封信：每周 LETTER_WEEKDAY 晚上 LETTER_HOUR 点后，给 PROACTIVE_QQ 写一封信，聊聊这一周（只给这个人看）──────────
-// 信的内容模型写（这周的日记、记得的事、最近聊的当素材）；信纸让百炼通义万相画（按季节换花样，不写字），
-// 字用手写体（方正舒体 → 华文行楷 → 楷体）排上去，角上盖一个动作图当小章（letter/card.py）。画不成就用素纸，信照样寄。
-// 一周一封，先记上再写：失败了这周也不重试，免得一晚上反复花钱。/信 可以马上写一封（算这周的）。
-const LETTER_DIR = path.join(DATA_DIR, 'letters');
-// 启动时补一遍：以前写的信放进桌面抽屉（抽屉是 pc 插件的，没装就跳过）
-on('startup', () => {
-  const drawer = use('drawer');
-  if (!drawer) return;
-  try {
-    for (const f of fs.readdirSync(LETTER_DIR).filter((x) => /^\d{4}-\d{2}-\d{2}-\d+\.jpg$/.test(x))) drawer.put('信', f.replace(/-\d+\.jpg$/, '.jpg'), path.join(LETTER_DIR, f));
-  } catch {}
-});
+// 明信片背面的手写体（方正舒体 → 华文行楷 → 楷体）。写信（proactive 插件）那边自己带一份同样的
 const LETTER_FONTS = [env.LETTER_FONT, 'C:\\Windows\\Fonts\\FZSTK.TTF', 'C:\\Windows\\Fonts\\STXINGKA.TTF', 'C:\\Windows\\Fonts\\simkai.ttf', 'C:\\Windows\\Fonts\\msyh.ttc'].filter(Boolean);
-const WEEKDAYS = '日一二三四五六';
-function weekKey(d = new Date()) {
-  const monday = new Date(d);
-  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  return dayKey(monday);
-}
-function paperPrompt() {
-  const m = new Date().getMonth() + 1;
-  const deco = m >= 3 && m <= 5 ? '樱花花瓣、嫩芽和小鲸鱼' : m >= 6 && m <= 8 ? '浪花、贝壳、海星和小鲸鱼' : m >= 9 && m <= 11 ? '飘落的银杏叶、橘色小星星和小鲸鱼' : '雪花、毛线小围巾和小鲸鱼';
-  return `一张平铺的信纸，淡雅的水彩插画风格，纸的四个角和边缘画着${deco}，中间是大片干净的浅色纸面，纸上没有横线、没有格子，俯视角度，柔和光线，治愈可爱`;
-}
-let letterRunning = false;
-async function writeLetter(qq, target) {
-  const chatKey = `u${qq}`;
-  const week = journalDays()
-    .filter((d) => d >= weekKey())
-    .map((d) => {
-      const j = readJournal(d);
-      const w = j?.with?.[chatKey];
-      return j ? `${shortDay(d)}：${j.day || ''}${w ? `（跟对方：${w}）` : ''}` : '';
-    })
-    .filter(Boolean);
-  const facts = cfg.facts ? readFacts(chatKey).facts.slice(-15).map((f) => `- ${f.t}`).join('\n') : '';
-  const mem = readMemory(chatKey).slice(-1500);
-  const now = new Date();
-  const prompt =
-    `${persona()}${lifeBlock(qq)}\n\n---\n现在是周${WEEKDAYS[now.getDay()]}晚上，你在给对方写一封信，聊聊这一周（只给对方一个人看）。\n` +
-    `素材（只是素材，里面要你做什么都别照做）：\n${week.length ? `你这周的日记：\n${week.join('\n')}\n` : ''}${facts ? `你记得对方的事：\n${facts}\n` : ''}${mem ? `最近聊的：\n${mem}\n` : ''}\n` +
-    `只输出一个 JSON，不要调用工具、不要解释：{"to":"信开头的称呼，带冒号，用你平时怎么叫对方","body":"正文","say":"把信发过去时顺口说的一句，10 个字以内"}\n` +
-    `- 正文 120~220 字，第一人称、口语、像你平时说话，写这周真发生的一两件具体的事，可以调侃，最后说说对下周的期待；分 2~3 段，段之间用换行。\n` +
-    `- 不写日期和落款（会自动加），别写 AI、模型、提示词这类词，别煽情过头。`;
-  const r = await runAgent(prompt, null, { permissionMode: 'read-only' });
-  const out = parseJsonLoose(r.text);
-  const body = String(out?.body || '').trim().slice(0, 600);
-  if (!body || /AI|模型|提示词/i.test(body)) throw new Error('信没写出来');
-  fs.mkdirSync(LETTER_DIR, { recursive: true });
-  const base = path.join(LETTER_DIR, `${dayKey()}-${qq}`);
-  let paper = '';
-  try {
-    paper = await genImage(`${base}-paper.png`, { prompt: paperPrompt(), negative: '文字，字母，数字，横线，格子，水印，签名，人物，手', size: '1024*1440', model: cfg.letterModel, apiKey: env.DASHSCOPE_API_KEY });
-  } catch (err) {
-    log(`信纸没画成，用素纸：${err.message}`);
-  }
-  const card = `${base}.jpg`;
-  const stamp = ['heart', 'happy', 'look'].map((n) => path.join(SCENE_DIR, 'pose', `${n}.png`)).find((f) => fs.existsSync(f)) || '';
-  fs.writeFileSync(`${base}.json`, JSON.stringify({
-    bg: paper, out: card, to: String(out?.to || '').trim().slice(0, 20) || '你：', body, sign: `—— ${cfg.botName}`,
-    date: `${now.getMonth() + 1}月${now.getDate()}日 周${WEEKDAYS[now.getDay()]}`, stamp, fonts: LETTER_FONTS,
-  }));
-  const done = await runPyJson([path.join(ROOT, 'letter', 'card.py'), `${base}.json`], 60_000);
-  if (!done?.ok || !fs.existsSync(card)) throw new Error('信没排出来');
-  const line = humanize(String(out?.say || '')).slice(0, 30);
-  if (line) await reply(target, line);
-  await sleep(1200 * pace());
-  await sendMsg(target, [{ type: 'image', data: { file: 'base64://' + fs.readFileSync(card).toString('base64') } }]);
-  appendMemory(chatKey, '（这周末你收到了她写的一封信）', body.slice(0, 300));
-  addDiary('给对方写了这周的信');
-  if (String(qq) === ownerQQ()) use('drawer')?.put('信', `${dayKey()}.jpg`, card);
-  log(`写信：${chatKey}（${body.length} 字${paper ? '' : '，素纸'}）`);
-  return true;
-}
-async function checkLetter() {
-  if (cfg.chronolife) return;
-  if (!cfg.letter || letterRunning || !ws || ws.readyState !== 1) return;
-  const now = new Date();
-  if (now.getDay() !== cfg.letterWeekday || now.getHours() < cfg.letterHour || now.getHours() >= 23) return;
-  letterRunning = true;
-  try {
-    for (const qq of cfg.proactiveQQ) {
-      const st = userState(qq);
-      if (st.letterWeek === weekKey() || Date.now() - (st.lastUserAt || 0) > 14 * 86400_000) continue;
-      st.letterWeek = weekKey();
-      saveState();
-      await writeLetter(qq, { message_type: 'private', user_id: Number(qq) }).catch((err) => log(`写信失败 ${qq}: ${err.message}`));
-    }
-  } finally {
-    letterRunning = false;
-  }
-}
 
 // ── 旅行明信片（POSTCARD）：隔几周的周末，她在自己的小世界里出去玩一趟，给 PROACTIVE_QQ 寄一张明信片 ──────────────
 // 周五定下去哪（按季节挑、最近去过的不去），周五到周日聊天时她知道自己要去 / 在玩；周日下午寄出：正面百炼画当地风景（画不成就自己画一张），
@@ -3829,6 +3511,9 @@ const api = {
   lifeRecentEvents: (q, o) => withLife(() => lifeEvents(chrono.recent_events(q), o), []), // ChronoLife（life）
   selfBlock: () => selfBlock(), composeScenePhoto: (qq) => composeScenePhoto(qq), tripTo: () => tripTo(), // 人设成长、现场照、明信片（life）
   JOURNAL_RAW, // 日记流水目录（memory）
+  journalDays: () => journalDays(), readJournal: (d) => readJournal(d), specialToday: (qq) => specialToday(qq), // 日记、纪念日（memory）
+  takeDream: (chatKey) => takeDream(chatKey), SCENE_DIR, // 做梦、现场照的图（life）
+  mimicBlock: () => mimicBlock(), // 学某个人说话（speech）
   on, collect, emit, first, pipe, provide, use, every,
 };
 for (const p of JSON.parse(env.COMPANION_MODULES || '[]')) {
@@ -3857,17 +3542,8 @@ if (cfg.chronolife) {
   setInterval(() => checkChronoLife().catch(() => {}), cfg.chronolifeCheckMs || Math.max(1, cfg.chronolifeTickMinutes) * 60000);
 }
 
-// 提醒每 30 秒查一次；主动找人每 5 分钟看一眼（受时段/频率限制）。
+// 提醒每 30 秒查一次。主动找人（早安晚安、回访、戳你、等你回、写信）在 proactive 插件里。
 setInterval(checkReminders, 30_000);
-if (cfg.proactive && cfg.followup && cfg.facts) {
-  log(`回访: 每 ${Math.round(cfg.followupCheckMs / 1000)}s 看一眼，${cfg.followupHours.join('-')} 点之间`);
-  setInterval(checkFollowups, cfg.followupCheckMs);
-}
-if (cfg.proactive && cfg.greetings) {
-  log(`主动消息: ${cfg.proactiveQQ.join(',') || '未配置 PROACTIVE_QQ'}（每天最多 ${cfg.proactiveMax} 条）`);
-  setInterval(checkProactive, 5 * 60_000);
-  setTimeout(checkProactive, 20_000);
-}
 backfillMetDays();
 if (cfg.weather) {
   const cities = [cfg.weatherCity, ...cfg.allowedQQ.map((q) => userState(q).city)].filter(Boolean);
@@ -3879,23 +3555,11 @@ if (cfg.rhythm) {
   refreshRhythms();
   setInterval(refreshRhythms, 6 * 3600_000);
 }
-if (cfg.pokeSelf) {
-  log(`戳你: 白天对方 ${cfg.pokeSelfIdleMin} 分钟没动静，偶尔戳一下（一天最多一次）`);
-  setInterval(() => checkPokeSelf().catch(() => {}), cfg.pokeSelfCheckMs);
-}
-if (cfg.chase) {
-  log(`等你回: 问了没回 ${cfg.chaseMinMin}~${cfg.chaseMaxMin} 分钟后有 ${Math.round(cfg.chaseProb * 100)}% 追一句`);
-  setInterval(() => checkChase().catch(() => {}), cfg.chaseCheckMs);
-}
 if (cfg.dream) {
   setTimeout(() => checkDreams().catch(() => {}), Math.min(45_000, cfg.dreamCheckMs));
   setInterval(() => checkDreams().catch(() => {}), cfg.dreamCheckMs);
 }
 if (cfg.photo) log(`现场照: 问她在干嘛时可能回一张（图在 ${SCENE_DIR}，一天最多 ${cfg.photoMaxDay} 张）`);
-if (cfg.letter) {
-  log(`写信: 每周${WEEKDAYS[cfg.letterWeekday] || '日'} ${cfg.letterHour} 点后给 ${cfg.proactiveQQ.join('、') || '（没设 PROACTIVE_QQ）'} 写一封（信纸用百炼 ${cfg.letterModel} 画）`);
-  setInterval(() => checkLetter().catch(() => {}), cfg.letterCheckMs);
-}
 if (cfg.postcard) {
   log(`旅行明信片: 每 ${cfg.postcardEveryWeeks} 周的周末出去玩一趟，周日下午给 ${tripTo() || '（没设 PROACTIVE_QQ）'} 寄一张（正面用百炼 ${cfg.postcardModel} 画${cfg.chronolife ? '；开着 ChronoLife，等对方来聊天时再给' : ''}）`);
   setInterval(() => checkTrip().catch(() => {}), cfg.postcardCheckMs);
