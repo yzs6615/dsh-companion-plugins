@@ -25,7 +25,7 @@ export default function setup(api) {
     qzoneRight: Number(env.QZONE_RIGHT ?? 4), // 谁能看：1 所有人，4 好友，64 仅自己
     qzoneCheckMs: Number(env.QZONE_CHECK_MS ?? 600_000),
   });
-  // 下面这几样还在本体里（心情和作息、自己找事做、电脑室友、ChronoLife 那几组还没搬），先从 api 上的过渡取值函数拿
+  // 下面这几样还在本体里（心情和作息、自己找事做、ChronoLife 那几组还没搬），先从 api 上的过渡取值函数拿；电脑上的事走 pc 服务（没装就当不知道）
   const { inSleepHours, sleepHour } = api;
   // 跟本体里的一样：ChronoLife 的活动名去掉“虚拟”两个字
   const unVirtual = (t) => String(t || '').replace(/虚拟的?/g, '');
@@ -58,7 +58,7 @@ export default function setup(api) {
     const doingName = api.doingName();
     if (doingName) return { wording: `在${doingName}`, face: 21 };
     if (presence.busy === '听歌中' && Date.now() < presence.busyUntil) return { wording: '在听歌', face: 14 };
-    const pcNow = api.pcNow();
+    const pcNow = api.use('pc')?.now();
     const song = cfg.pcBuddy && pcNow?.music && Date.now() - pcNow.at < 10 * 60_000 ? pcNow.music.title.split(/ [-–] /)[0] : '';
     if (song) return { wording: `陪你听：${song}`, face: 14 };
     const w = MOOD_WORDING[myState().mood];
@@ -207,7 +207,7 @@ export default function setup(api) {
     const q = state._qzone || (state._qzone = {});
     const h = new Date().getHours();
     const [a, b] = cfg.qzoneHours;
-    if (q.day === dayKey() || h < a || h >= b || api.pcQuiet() || Math.random() >= cfg.qzoneProb) return;
+    if (q.day === dayKey() || h < a || h >= b || api.quiet() || Math.random() >= cfg.qzoneProb) return;
     q.day = dayKey(); // 先记上：没发成今天也不再试
     saveState();
     qzoneRunning = true;
@@ -224,7 +224,7 @@ export default function setup(api) {
   // /说说：主人私聊让她马上发一条（原来在“对方开口”之前，所以挂 message:command）
   api.on('message:command', async (ev, text) => {
     if (text !== '/说说') return false;
-    if (!cfg.qzone || ev.message_type === 'group' || String(ev.user_id) !== String(cfg.proactiveQQ[0] || api.pcOwner())) {
+    if (!cfg.qzone || ev.message_type === 'group' || String(ev.user_id) !== String(cfg.proactiveQQ[0] || api.owner())) {
       await reply(ev, cfg.qzone ? '这个只听主人的' : '还没开 QQ 空间');
       return true;
     }

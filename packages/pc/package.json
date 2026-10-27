@@ -13,7 +13,9 @@
     "README.md",
     "cordis.patch.yml",
     "index.js",
-    "module.mjs"
+    "module.mjs",
+    "pc.mjs",
+    "qqmusic.mjs"
   ],
   "engines": {
     "node": ">=22"

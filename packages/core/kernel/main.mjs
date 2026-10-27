@@ -51,8 +51,6 @@ import { speak } from './tts.mjs';
 import { createRadio, radioRequest, extractRadioTag, parseAsk, findRadioSong, radioAgo } from './radio.mjs';
 import { getWeather, cachedWeather, notable, describe as describeWeather } from './weather.mjs';
 import { pickByMeaning, readIndex, writeIndex } from './stickers.mjs';
-import { pcSnapshot } from './pc.mjs';
-import { searchSong, pickSong, playInClient, openSongPage, songUrl } from './qqmusic.mjs';
 import { genImage } from './imagegen.mjs';
 import { openLife, LifeAdapter } from './chronolife/adapter.mjs';
 
@@ -140,13 +138,17 @@ const STICKER_DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(
 const SONG_DIR = env.SONG_DIR ? path.resolve(env.SONG_DIR) : path.join(DATA_DIR, 'songs');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const sessions = readJson(SESSIONS_FILE, {});
+// 主人是谁：PC_OWNER（电脑是谁的），没设就是 PROACTIVE_QQ 第一个。写信、明信片、作息被带偏、ChronoLife、电脑上的她都认这一个
+function ownerQQ() {
+  return String(cfg.pcOwner || cfg.proactiveQQ[0] || '');
+}
 let chrono = null;
 let chronoAdapter = null;
 if (cfg.chronolife) {
   try {
     chrono = openLife(DATA_DIR, cfg);
     chrono.simulate_until(Date.now());
-    chronoAdapter = new LifeAdapter({ engine: chrono, dataDir: DATA_DIR, owner: cfg.pcOwner || cfg.proactiveQQ[0] || cfg.allowedQQ[0], clearSession: key => { if (key === 'global') for (const k of Object.keys(sessions)) delete sessions[k]; else delete sessions[key]; saveSessions(); } });
+    chronoAdapter = new LifeAdapter({ engine: chrono, dataDir: DATA_DIR, owner: ownerQQ() || cfg.allowedQQ[0], clearSession: key => { if (key === 'global') for (const k of Object.keys(sessions)) delete sessions[k]; else delete sessions[key]; saveSessions(); } });
   } catch (err) {
     try { chrono?.close(); } catch { /* 初始化失败的句柄可能已经关闭。 */ }
     chrono = null;
@@ -675,6 +677,14 @@ function inSleepHours(h = new Date().getHours()) {
   const b = wakeHour();
   return a <= b ? h >= a && h < b : h >= a || h < b;
 }
+/** 现在该不该安静：睡觉时段、QUIET_HOURS（默认 23~9 点），或者 ChronoLife 在休息 / 停用。插件主动出声、发东西前都看这个。 */
+function quietNow() {
+  const h = new Date().getHours();
+  const [a, b] = cfg.quietHours;
+  if (inSleepHours(h) || (a !== b && (a < b ? h >= a && h < b : h >= a || h < b))) return true;
+  const life = cfg.chronolife ? withLife(() => chrono.get_state(), null) : null;
+  return !!life && (life.mode === 'rest' || life.mode === 'disabled');
+}
 
 // ── 日记：每天睡前写一篇，当长期上下文 ─────────────────────────────────────
 // 白天每轮聊天记一行流水（data/journal/raw/<日期>.jsonl，一直留着，日记网页里能翻）；晚上 JOURNAL_HOUR 点后（或者第二天补写）
@@ -915,7 +925,7 @@ function lifeBlock(qq) {
   );
 }
 on('prompt:state', (qq) =>
-  qq && sleepShift() && String(qq) === String(cfg.pcOwner || cfg.proactiveQQ[0] || '')
+  qq && sleepShift() && String(qq) === ownerQQ()
     ? `\n你最近被对方带得${sleepShift() > 0 ? '睡晚了' : '早睡了'}，现在大概 ${sleepHour()} 点才犯困（对方最近 ${state._sleepDrift?.ownerSleep || '?'} 左右才没动静）；偶尔可以抱怨一句“都怪你”。`
     : '', 10);
 on('prompt:state', (qq) => (qq ? dayBlock(qq) : ''), 20);
@@ -1002,7 +1012,6 @@ on('prompt:context', (t) => factBlockOf(t.chatKey), 50);
 on('prompt:context', (t) => journalBlock(t.chatKey), 60);
 on('prompt:context', (t) => forwardBlock(t.chatKey), 70);
 on('prompt:context', () => busyBlock(), 80);
-on('prompt:context', (t) => pcBlock(t.qq, t.isGroup), 90);
 on('prompt:context', (t) => (t.isGroup ? '' : dreamBlock(t.chatKey)), 100);
 on('prompt:context', (t) => (t.isGroup ? '' : tripBlock(t.qq)), 110);
 on('prompt:context', (t) => (t.isGroup ? '' : giftBlock(t.qq)), 120);
@@ -1015,7 +1024,6 @@ on('prompt:after', (t) => lifeNotesBlock(t.chatKey));
 on('prompt:hint', () => (cfg.emotion ? MOOD_TAG_HINT : ''), 10);
 on('prompt:hint', (t) => photoHint(t.text, t.isGroup), 20);
 on('prompt:hint', (t) => giftHint(t.text, t.isGroup), 30);
-on('prompt:hint', (t) => musicHint(t.qq, t.text, t.isGroup), 40);
 // 还没搬走的：消息进来时各功能要记的
 on('message:seen', (ev) => {
   if (ev.user_id && cfg.allowedQQ.includes(String(ev.user_id))) {
@@ -1628,6 +1636,8 @@ on('say:after', async (target, text, tags, opts) => {
 }, 20);
 
 const voiceDay = { day: '', count: 0 };
+// 还没搬走的：合成语音先就地当 voice 服务给出去（电脑喇叭要用），搬“说话的样子”（speech）时连 tts.mjs 一起挪过去
+provide('voice', { speak: (text, opts) => speak(text, opts) });
 /** 模型想发语音时把关：开了、不太长、今天还没发太多。不满足就照常打字。 */
 function voiceAllowed(text) {
   if (!cfg.voice) return false;
@@ -2163,7 +2173,7 @@ function refreshRhythms() {
   }
   // 作息被带偏：电脑主人最近 7 天几点没动静 → 她的睡觉时段跟着挪（至少要有 3 天的数据）
   if (cfg.sleepDrift) {
-    const owner = String(cfg.pcOwner || cfg.proactiveQQ[0] || '');
+    const owner = ownerQQ();
     const recent = computeRhythm((per.get(owner) || []).filter((t) => Date.now() - t < 7 * 86400_000), 3);
     const shift = recent ? sleepDrift(cfg.sleepStart, recent.sleep, cfg.sleepDriftMax) : 0;
     const prev = state._sleepDrift?.shift || 0;
@@ -2359,7 +2369,7 @@ async function checkAutonomy() {
     const text = humanize(body).trim();
     addDiary(diary, text && !text.includes('[SILENT]') ? text : '');
     const links = `${body} ${diary}`.match(/BV[0-9A-Za-z]{10}|https?:\/\/\S+/g); // 看到的视频、歌：收进抽屉的“收藏”
-    if (links) drawerAppend('收藏.txt', `${dayKey()}  ${(diary || text).replace(/\s+/g, ' ').slice(0, 80)}  ${[...new Set(links)].join(' ')}`);
+    if (links) use('drawer')?.append('收藏.txt', `${dayKey()}  ${(diary || text).replace(/\s+/g, ' ').slice(0, 80)}  ${[...new Set(links)].join(' ')}`);
     const reasonId = `explore:${a.lastAt}`;
     if (cfg.chronolife && diary) withLife(() => chrono.commit_observed_event({ id: reasonId, at: a.lastAt, kind: 'explore', content: `${act.name}：${diary}`.slice(0, 400) }));
     if (!text || text.includes('[SILENT]')) {
@@ -3183,11 +3193,6 @@ on('turn:answer', (answer, t) => {
   return answer.replace(/\[照片\]/g, '').trim() || '你看';
 }, 40);
 on('turn:answer', (answer, t) => {
-  // [放歌:歌名 歌手]：回完这句在对方电脑上的 QQ 音乐里放（不在电脑前就发链接）
-  t.tags.play = answer.match(/\[放歌[:：]\s*([^\]]+?)\s*\]/)?.[1] || '';
-  return answer.replace(/\[放歌[:：][^\]]*\]/g, '').trim() || '给你放首歌';
-}, 50);
-on('turn:answer', (answer, t) => {
   // [收礼物:东西名]：对方送的东西摆进她房间（画好、抠好后拍一张“摆好了”）
   t.tags.gift = answer.match(/\[收礼物[:：]\s*([^\]]+?)\s*\]/)?.[1] || '';
   return answer.replace(/\[收礼物[:：][^\]]*\]/g, '').trim() || '谢谢 我收下了';
@@ -3196,14 +3201,16 @@ on('turn:answer', () => {
   markStayedUp();
 }, 70);
 on('turn:spoken', (tags) => (tags.sing !== null && tags.sing !== undefined ? `（唱了一段${tags.sing ? `《${tags.sing}》` : ''}）` : ''), 10);
-on('turn:spoken', (tags, t) => (t.tags.play && cfg.playMusic ? `（放了首歌：${t.tags.play}）` : ''), 20);
 on('turn:spoken', (tags, t) => (t.tags.gift && cfg.photo ? `（收下了对方送的${t.tags.gift}，摆在房间里）` : ''), 30);
 on('turn:record', (t) => logDay(t.chatKey, t.who, t.text, t.spoken || '（发了个表情）'));
 on('turn:after', async (t) => {
-  const { ev, chatKey, ids, spoken, isGroup, text } = t;
+  const { ev, chatKey, ids, spoken, isGroup } = t;
   withLife(() => { if (chrono.settings().enabled) chrono.record_interaction({ id: `qq:${chatKey}:${ids?.join('-') || Date.now()}:out`, scope: chatKey, text: spoken.slice(0, 2000) || '（表情）', direction: 'out' }); });
   if (t.tags.photo && cfg.photo && !isGroup) await sendScenePhoto(ev).catch((err) => log(`现场照失败: ${err.message}`));
-  if (t.tags.play && cfg.playMusic && !isGroup) await playSong(ev, t.tags.play).catch((err) => log(`放歌失败: ${err.message}`));
+}, 10);
+// 原来是一个钩子：现场照 → 放歌 → 收礼物、明信片、等你回、电台。放歌搬进了 pc 插件（order 20），这里拆成 10 和 30，先后不变
+on('turn:after', async (t) => {
+  const { ev, chatKey, spoken, isGroup, text } = t;
   if (t.tags.gift && cfg.photo && !isGroup) receiveGift(ev, t.tags.gift).catch((err) => log(`收礼物没成: ${err.message}`)); // 画要半分钟，不占着这个聊天
   if (t.giveCard && t.trip.pending === t.giveCard) {
     t.trip.pending = null;
@@ -3219,294 +3226,8 @@ on('turn:after', async (t) => {
     }
     startRadio(ev, req, { ack: false, chatKey, who: senderName(ev), uid: ev.user_id, userText: text, mood: myState(chatKey).mood });
   }
-}, 10);
+}, 30);
 on('turn:after', (t) => maybeExtractFacts(t.chatKey, t.text), 90);
-
-// ── 电脑室友：她住在这台电脑里，看得见在放什么歌、开着什么游戏、电脑开了多久、人在不在电脑前（pc.mjs）───────────
-// 只跟电脑的主人（PC_OWNER，默认 PROACTIVE_QQ 第一个）提，只在私聊里带；群里、别的人都不知道。
-// 聊天时提示词里带一段“这台电脑上”；碰上值得说的事（一首歌这周放到第 3 遍、凌晨还在打游戏 / 还在电脑前、电脑连开好几天），
-// 偶尔主动说一句：一天最多 PC_MAX_DAY 句、两句至少隔 90 分钟、同一件事隔几天才再提，对方正在跟她聊的时候不插话。
-const pcOwner = () => String(cfg.pcOwner || cfg.proactiveQQ[0] || '');
-let pcNow = null; // 最近一次看到的电脑（只在内存里，不落盘）
-let pcRunning = false;
-function spanDesc(ms) {
-  const m = Math.max(1, Math.round(ms / 60_000));
-  return m < 60 ? `${m} 分钟` : `${Math.floor(m / 60)} 小时${m % 60 >= 10 ? ` ${m % 60} 分钟` : ''}`;
-}
-function pcPlays(title) {
-  return (state._pc?.plays?.[title] || []).filter((t) => Date.now() - t < 7 * 86400_000).length;
-}
-function pcBlock(qq, isGroup) {
-  if (!cfg.pcBuddy || isGroup || String(qq) !== pcOwner() || !pcNow || Date.now() - pcNow.at > 10 * 60_000) return '';
-  const h = new Date().getHours();
-  const out = [];
-  if (pcNow.music) {
-    const n = pcPlays(pcNow.music.title);
-    out.push(`正在放：${pcNow.music.title}（${pcNow.music.app}${n >= 2 ? `，这周放了 ${n} 遍` : ''}）`);
-  }
-  if (pcNow.game) out.push(`开着游戏：${pcNow.game.name}（玩了 ${spanDesc(Date.now() - pcNow.game.since)}）`);
-  const up = pcNow.bootAt ? (Date.now() - pcNow.bootAt) / 3600_000 : 0;
-  if (up >= 24) out.push(`电脑已经连着开了 ${Math.floor(up / 24)} 天没关`);
-  if (h < 5 && pcNow.idleSec < 300) out.push('这么晚了，人还在电脑前（键盘鼠标刚刚还在动）');
-  if (!out.length) return '';
-  return `\n\n---\n【这台电脑上】（你就住在这台电脑里，这些你直接听得到、看得到）\n${out.map((s) => `- ${s}`).join('\n')}\n（像住在一起的室友，偶尔顺口提一句就行，别每次都提，别像在监视，别说“检测到”这种词。）`;
-}
-function pcEvent(snap, started, pc) {
-  const owner = pcOwner();
-  if (!owner || !ws || ws.readyState !== 1) return null;
-  const now = Date.now();
-  const h = new Date().getHours();
-  if (pc.day !== dayKey()) Object.assign(pc, { day: dayKey(), count: 0 });
-  if (pc.count >= cfg.pcMaxDay || now - (pc.lastAt || 0) < 90 * 60_000) return null;
-  const chatKey = `u${owner}`;
-  if (activeChats.has(chatKey) || batches.has(chatKey) || now - (userState(owner).lastUserAt || 0) < 10 * 60_000) return null; // 正聊着：提示词里有，不另外插话
-  const said = (k, days) => now - (pc.said[k] || 0) < days * 86400_000;
-  if (started) {
-    const n = pcPlays(started.title);
-    if (n >= 3 && !said(`song:${started.title}`, 3)) return { key: `song:${started.title}`, what: `电脑上刚开始放《${started.title}》（${started.app}），这首这周已经放了 ${n} 遍` };
-    if (Math.random() < cfg.pcSongProb && !said('song', 0.25)) return { key: 'song', what: `电脑上刚开始放《${started.title}》（${started.app}）` };
-  }
-  if (h < 5 && snap.game && now - snap.game.since > 3600_000 && !said('lategame', 0.5)) return { key: 'lategame', what: `现在凌晨 ${h} 点多了，对方还在玩${snap.game.name}（已经玩了 ${spanDesc(now - snap.game.since)}）` };
-  if (h >= 1 && h < 5 && !snap.game && snap.idleSec < 180 && !said('late', 0.5)) return { key: 'late', what: `现在凌晨 ${h} 点多了，对方还在电脑前（键盘鼠标刚刚还在动）` };
-  const up = snap.bootAt ? (now - snap.bootAt) / 86400_000 : 0;
-  if (up >= 2 && h >= 10 && h < 22 && !said('uptime', 3)) return { key: 'uptime', what: `对方的电脑已经连着开了 ${Math.floor(up)} 天没关机` };
-  return null;
-}
-async function pcSay(event, pc) {
-  if (cfg.chronolife) return;
-  const owner = pcOwner();
-  const prompt =
-    `${persona()}${lifeBlock(owner)}${selfBlock()}\n\n---\n你住在对方这台电脑里，刚注意到：${event.what}。\n` +
-    `像住在一起的室友那样随口说一句：吐槽、关心、跟着哼两句、问一句都行，1 句，口语。你本来就在这台电脑里，别解释是怎么知道的，别说“检测到”“监控”这种词；` +
-    `正在睡觉时段的话可以说是被吵醒的。不想说就只输出 [SILENT]。只输出要发的话。`;
-  try {
-    const r = await runAgent(prompt, null, { permissionMode: 'read-only' });
-    const text = humanize(r.text).trim();
-    pc.said[event.key] = Date.now(); // 不管说没说，这件事这几天都不再提
-    saveState();
-    if (!text || /\[SILENT\]/i.test(text)) return;
-    await say({ message_type: 'private', user_id: Number(owner) }, text, { casual: true, autoMood: 0.3 });
-    Object.assign(pc, { count: (pc.count || 0) + 1, lastAt: Date.now() });
-    saveState();
-    appendMemory(`u${owner}`, `（你注意到电脑上：${event.what}）`, text);
-    log(`电脑室友：${event.key} → ${text.slice(0, 60)}`);
-  } catch (err) {
-    log(`电脑室友没说成: ${err.message}`);
-  }
-}
-async function checkPc() {
-  if (!cfg.pcBuddy || pcRunning || !ws || ws.readyState !== 1) return; // 没连上 QQ 时别看：刚开始放的歌会被白白记掉
-  pcRunning = true;
-  try {
-    let snap;
-    try {
-      snap = await pcSnapshot();
-    } catch {
-      return; // 这次没看成，下次再看
-    }
-    const pc = state._pc || (state._pc = { song: '', plays: {}, said: {} });
-    const now = Date.now();
-    let started = null; // 这一眼刚开始放的歌
-    if (snap.music && snap.music.title !== pc.song) {
-      started = snap.music;
-      pc.plays[started.title] = [...(pc.plays[started.title] || []), now];
-    }
-    pc.song = snap.music?.title || '';
-    for (const [t, list] of Object.entries(pc.plays)) {
-      const keep = list.filter((x) => now - x < 14 * 86400_000);
-      if (keep.length) pc.plays[t] = keep;
-      else delete pc.plays[t];
-    }
-    // 离开 / 回来：上一次看到的“最后动键盘鼠标的时间”到这一次之间隔了 AWAY_MIN 以上，就是刚回来
-    const lastInput = now - snap.idleSec * 1000;
-    const prevInput = pc.lastInput || lastInput;
-    const back = snap.idleSec < 120 && lastInput - prevInput >= cfg.awayMin * 60_000 ? lastInput - prevInput : 0;
-    pc.lastInput = Math.max(prevInput, lastInput);
-    pcNow = snap;
-    saveState();
-    if (back) return void (await pcCameBack(back, pc));
-    if (snap.idleSec >= cfg.noteAfterMin * 60) await pcLeaveNote(pc, snap.idleSec * 1000);
-    const event = pcEvent(snap, started, pc);
-    if (event) await pcSay(event, pc);
-  } finally {
-    pcRunning = false;
-  }
-}
-
-// ── 电脑上的她：回来时从电脑喇叭打个招呼（SPEAKER）、离开很久时在桌面留张便条，回来弹个通知（NOTES）、桌面抽屉（DRAWER）──────
-// 这些不是 QQ 消息，开着 ChronoLife 也照做，但跟它的作息对齐：睡觉时段、QUIET_HOURS（默认 23~9 点）、它在休息时都不出声、不留条。
-// 测试用 SPEAKER_LOG / NOTIFY_LOG / DESKTOP_DIR 代替真的放声音、弹通知、写桌面。
-let desktopPath = '';
-function desktop() {
-  if (desktopPath) return desktopPath;
-  if (env.DESKTOP_DIR) return (desktopPath = path.resolve(env.DESKTOP_DIR));
-  try {
-    const b64 = execFileSync('powershell', ['-NoProfile', '-Command', "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([Environment]::GetFolderPath('Desktop')))"], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
-    desktopPath = Buffer.from(b64.trim(), 'base64').toString('utf8');
-  } catch {}
-  return desktopPath || (desktopPath = path.join(env.USERPROFILE || ROOT, 'Desktop'));
-}
-function pcQuiet() {
-  const h = new Date().getHours();
-  const [a, b] = cfg.quietHours;
-  if (inSleepHours(h) || (a !== b && (a < b ? h >= a && h < b : h >= a || h < b))) return true;
-  const life = cfg.chronolife ? withLife(() => chrono.get_state(), null) : null;
-  return !!life && (life.mode === 'rest' || life.mode === 'disabled');
-}
-function runHiddenPs(script) {
-  spawn('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-}
-const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
-/** 右下角弹个通知（NotifyIcon 气泡，Win11 上就是一条系统通知）。 */
-function desktopNotify(title, text) {
-  if (env.NOTIFY_LOG) return void fs.appendFileSync(env.NOTIFY_LOG, `${title}｜${text}\n`);
-  runHiddenPs(`Add-Type -AssemblyName System.Windows.Forms; $n = New-Object System.Windows.Forms.NotifyIcon; $n.Icon = [System.Drawing.SystemIcons]::Information; $n.Visible = $true; $n.ShowBalloonTip(15000, ${psq(title)}, ${psq(text)}, 'None'); Start-Sleep -Seconds 20; $n.Dispose()`);
-}
-/** 用她的声音从电脑喇叭说一句（百炼合成，PowerShell 放 wav）。没开语音就不说。 */
-async function speakOnPc(text) {
-  if (env.SPEAKER_LOG) return fs.appendFileSync(env.SPEAKER_LOG, `${text}\n`), true;
-  if (!cfg.voice) return false;
-  const { wav } = await speak(text, { url: cfg.voiceWs, apiKey: env.DASHSCOPE_API_KEY, voice: cfg.voiceId, model: cfg.voiceModel, rate: cfg.voiceRate, cutMs: cfg.voiceCutMs });
-  const dir = path.join(DATA_DIR, 'speaker');
-  fs.mkdirSync(dir, { recursive: true });
-  const f = path.join(dir, `${Date.now()}.wav`);
-  fs.writeFileSync(f, wav);
-  runHiddenPs(`(New-Object System.Media.SoundPlayer ${psq(f)}).PlaySync()`);
-  for (const old of fs.readdirSync(dir).filter((x) => x.endsWith('.wav')).sort().slice(0, -10)) fs.rmSync(path.join(dir, old), { force: true });
-  return true;
-}
-async function pcCameBack(awayMs, pc) {
-  const owner = pcOwner();
-  if (!owner) return;
-  if (cfg.notes && pc.note && !pc.note.shown) {
-    pc.note.shown = true;
-    saveState();
-    desktopNotify(`${cfg.botName}给你留了张便条`, `${pc.note.text.split(/\n/)[0].slice(0, 50)}（在桌面上）`);
-    log('便条：对方回来了，弹了个通知');
-  }
-  if (!cfg.speaker || pcQuiet()) return;
-  const sp = pc.speak || (pc.speak = {});
-  if (sp.day !== dayKey()) Object.assign(sp, { day: dayKey(), count: 0 });
-  if (sp.count >= cfg.speakerMaxDay || Date.now() - (sp.at || 0) < 3600_000) return;
-  const morning = new Date().getHours() < 12 && sp.morning !== dayKey() && awayMs > 4 * 3600_000; // 今天头一回坐到电脑前
-  const what = morning ? '早上对方第一次坐到电脑前' : `对方离开电脑 ${spanDesc(awayMs)}，刚回来`;
-  const prompt =
-    `${persona()}${lifeBlock(owner)}\n\n---\n${what}。你住在这台电脑里，用电脑喇叭直接跟对方说一句（会用你自己的声音念出来，对方在房间里能听到）：` +
-    `很短，5~15 个字，像室友打招呼（“早”“回来啦 去哪了”这种），别带表情、括号和标记。只输出要说的话。`;
-  try {
-    const r = await runAgent(prompt, null, { permissionMode: 'read-only' });
-    const text = speakable(humanize(r.text)).slice(0, 30);
-    if (!text || !(await speakOnPc(text))) return;
-    Object.assign(sp, { count: sp.count + 1, at: Date.now(), ...(morning ? { morning: dayKey() } : {}) });
-    saveState();
-    appendMemory(`u${owner}`, `（${what}）`, `（用电脑喇叭说）${text}`);
-    log(`电脑喇叭：${morning ? '早上' : '回来'} → ${text}`);
-  } catch (err) {
-    log(`电脑喇叭没说成: ${err.message}`);
-  }
-}
-async function pcLeaveNote(pc, awayMs) {
-  const owner = pcOwner();
-  if (!cfg.notes || !owner || pcQuiet() || pc.noteDay === dayKey()) return;
-  pc.noteDay = dayKey(); // 一天最多一张，先记上
-  saveState();
-  const prompt =
-    `${persona()}${lifeBlock(owner)}${selfBlock()}\n\n---\n对方离开电脑 ${spanDesc(awayMs)} 了。你住在这台电脑里，在对方桌面上留一张便条，像室友贴在门上的纸条：` +
-    `1~3 句，口语，可以写你刚才干了啥、想到的事、提醒对方的小事。便条放在桌面上，别人也可能看到，别写私密的事和聊天内容。只输出便条内容。`;
-  try {
-    const r = await runAgent(prompt, null, { permissionMode: 'read-only' });
-    const text = humanize(r.text).trim().slice(0, 200);
-    if (!text || /AI|模型|提示词/i.test(text)) return;
-    const now = new Date();
-    const stamp = `${now.getMonth() + 1}月${now.getDate()}日 ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
-    fs.writeFileSync(path.join(desktop(), `${cfg.botName}的便条.txt`), `${text}\r\n\r\n—— ${cfg.botName}  ${stamp}\r\n`);
-    pc.note = { text, at: Date.now(), shown: false };
-    saveState();
-    drawerAppend('便条.txt', `${dayKey()} ${pad2(now.getHours())}:${pad2(now.getMinutes())}  ${text.replace(/\s*\n\s*/g, ' ')}`);
-    appendMemory(`u${owner}`, '（对方离开电脑好几个小时）', `（在对方桌面留了张便条）${text}`);
-    log(`便条：留在了桌面（${text.length} 字）`);
-  } catch (err) {
-    log(`便条没留成: ${err.message}`);
-  }
-}
-/** 桌面抽屉：她做的东西放一份（信、明信片、现场照、电台节目卡…）。 */
-function drawerDir() {
-  const d = path.join(desktop(), `${cfg.botName}的抽屉`);
-  if (!fs.existsSync(d)) {
-    fs.mkdirSync(d, { recursive: true });
-    fs.writeFileSync(path.join(d, '说明.txt'), `这是${cfg.botName}的抽屉。她写给你的信、寄的明信片、发给你的照片、梦见你的梦、留过的便条、自己收藏的视频，都会放一份在这里。\r\n`);
-  }
-  return d;
-}
-function drawerPut(sub, name, src) {
-  if (!cfg.drawer || !src || !fs.existsSync(src)) return;
-  try {
-    const d = path.join(drawerDir(), sub);
-    fs.mkdirSync(d, { recursive: true });
-    if (!fs.existsSync(path.join(d, name))) fs.copyFileSync(src, path.join(d, name));
-  } catch (err) {
-    log(`抽屉：没放进去（${err.message}）`);
-  }
-}
-function drawerAppend(file, line) {
-  if (!cfg.drawer) return;
-  try {
-    fs.appendFileSync(path.join(drawerDir(), file), `${line}\r\n`);
-  } catch (err) {
-    log(`抽屉：没记上（${err.message}）`);
-  }
-}
-/** 启动时补一遍：以前写的信放进抽屉。 */
-function drawerSync() {
-  if (!cfg.drawer) return;
-  try {
-    for (const f of fs.readdirSync(LETTER_DIR).filter((x) => /^\d{4}-\d{2}-\d{2}-\d+\.jpg$/.test(x))) drawerPut('信', f.replace(/-\d+\.jpg$/, '.jpg'), path.join(LETTER_DIR, f));
-  } catch {}
-}
-
-// ── 放歌（PLAY_MUSIC）：模型写 [放歌:歌名 歌手]，先在 QQ 音乐搜到这首（搜不到就说一声）──────────────────────
-// 电脑的主人在电脑前（键盘鼠标 5 分钟内动过）就在电脑上的 QQ 音乐里直接放（qqmusic.mjs）；不在电脑前、或者是别人点的，发 QQ 音乐的链接。
-// 只在私聊里放，一天最多 PLAY_MUSIC_MAX_DAY 首。测试用 QQMUSIC_SEARCH_FILE / PLAY_MUSIC_LOG 代替联网搜歌、真的放。
-const MUSIC_ASK = /歌|音乐|bgm|听点|听首|放首|放一首|放个/i;
-function musicHint(qq, text, isGroup) {
-  if (!cfg.playMusic || isGroup || String(qq) !== pcOwner()) return '';
-  const h = new Date().getHours();
-  if (!MUSIC_ASK.test(text) && !(h >= 22 || h < 2)) return '';
-  return '\n（你能用对方电脑上的 QQ 音乐放歌：对方让你放首歌、或者你想给对方放一首（比如夜里放首睡前听的），就在回复最后加 [放歌:歌名 歌手]，对方在电脑前就直接在 QQ 音乐里放，不在就发个链接；不想放就不加，别老放。）';
-}
-async function playSong(ev, query) {
-  const day = state._music?.day === dayKey() ? state._music : (state._music = { day: dayKey(), count: 0 });
-  if (day.count >= cfg.playMusicMaxDay) return log('放歌：今天放够了');
-  let song;
-  try {
-    song = pickSong(await searchSong(query, { file: env.QQMUSIC_SEARCH_FILE }), query);
-  } catch (err) {
-    return log(`放歌：没搜成（${err.message}）`);
-  }
-  if (!song) return void (await reply(ev, pick(['QQ 音乐上没搜到这首', '这首没搜到 换一首？'])));
-  day.count++;
-  saveState();
-  const label = `${song.name} - ${song.singer}`;
-  const snap = String(ev.user_id) === pcOwner() ? await pcSnapshot().catch(() => null) : null;
-  if (snap && snap.idleSec < 300 && playInClient(song, { exe: cfg.qqMusicExe, dir: path.join(DATA_DIR, 'music'), log: env.PLAY_MUSIC_LOG })) {
-    log(`放歌：在电脑上的 QQ 音乐放《${label}》`);
-    if (!env.PLAY_MUSIC_LOG) setTimeout(() => checkPlaying(song).catch(() => {}), 25_000);
-    return;
-  }
-  await sleep((600 + Math.random() * 900) * pace());
-  await reply(ev, `${label}\n${songUrl(song.mid)}`);
-  log(`放歌：发了《${label}》的链接`);
-}
-/** 放了 25 秒后看一眼：QQ 音乐压根没起来，就改成在浏览器里打开网页版这首歌。 */
-async function checkPlaying(song) {
-  const snap = await pcSnapshot();
-  const name = song.name.replace(/\s*[（(].*$/, '');
-  if (snap.music?.app === 'QQ音乐' && snap.music.title.includes(name)) return log('放歌：QQ 音乐已经在放了');
-  const running = /QQMusic\.exe/i.test(execFileSync('tasklist', ['/FI', 'IMAGENAME eq QQMusic.exe', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 15_000 }));
-  if (running) return log('放歌：QQ 音乐开着，但没看到在放这首（可能缩在托盘里）');
-  openSongPage(song);
-  log('放歌：QQ 音乐没起来，改成在浏览器里打开网页版');
-}
 
 // ── 做梦：早上醒来有时记得昨晚的梦（最近的事打乱了拼的），今天第一次聊天、或者早安时顺口说一句 ─────────────
 // 睡醒（SLEEP_END）到 DREAM_UNTIL 点之间，给最近 3 天聊过的人每人掷一次骰子（DREAM_PROB），梦见了就先写好存着；
@@ -3530,7 +3251,7 @@ async function checkDreams() {
       if (!text) continue;
       dreams[chatKey] = { tried: today, day: today, text, told: false };
       saveState();
-      if (String(qq) === pcOwner()) drawerAppend('梦.txt', `${today}  ${text}`); // 抽屉在主人的电脑上：只放梦见主人的
+      if (String(qq) === ownerQQ()) use('drawer')?.append('梦.txt', `${today}  ${text}`); // 抽屉在主人的电脑上：只放梦见主人的
       log(`做梦：${chatKey} → ${text.slice(0, 40)}`);
     }
   } finally {
@@ -3680,7 +3401,7 @@ async function sendScenePhoto(ev) {
   await sendMsg(ev, [{ type: 'image', data: { file: 'base64://' + fs.readFileSync(out).toString('base64') } }]);
   photoDay().count++;
   saveState();
-  if (String(ev.user_id) === pcOwner()) drawerPut('照片', path.basename(out), out);
+  if (String(ev.user_id) === ownerQQ()) use('drawer')?.put('照片', path.basename(out), out);
   return true;
 }
 
@@ -3689,6 +3410,14 @@ async function sendScenePhoto(ev) {
 // 字用手写体（方正舒体 → 华文行楷 → 楷体）排上去，角上盖一个动作图当小章（letter/card.py）。画不成就用素纸，信照样寄。
 // 一周一封，先记上再写：失败了这周也不重试，免得一晚上反复花钱。/信 可以马上写一封（算这周的）。
 const LETTER_DIR = path.join(DATA_DIR, 'letters');
+// 启动时补一遍：以前写的信放进桌面抽屉（抽屉是 pc 插件的，没装就跳过）
+on('startup', () => {
+  const drawer = use('drawer');
+  if (!drawer) return;
+  try {
+    for (const f of fs.readdirSync(LETTER_DIR).filter((x) => /^\d{4}-\d{2}-\d{2}-\d+\.jpg$/.test(x))) drawer.put('信', f.replace(/-\d+\.jpg$/, '.jpg'), path.join(LETTER_DIR, f));
+  } catch {}
+});
 const LETTER_FONTS = [env.LETTER_FONT, 'C:\\Windows\\Fonts\\FZSTK.TTF', 'C:\\Windows\\Fonts\\STXINGKA.TTF', 'C:\\Windows\\Fonts\\simkai.ttf', 'C:\\Windows\\Fonts\\msyh.ttc'].filter(Boolean);
 const WEEKDAYS = '日一二三四五六';
 function weekKey(d = new Date()) {
@@ -3747,7 +3476,7 @@ async function writeLetter(qq, target) {
   await sendMsg(target, [{ type: 'image', data: { file: 'base64://' + fs.readFileSync(card).toString('base64') } }]);
   appendMemory(chatKey, '（这周末你收到了她写的一封信）', body.slice(0, 300));
   addDiary('给对方写了这周的信');
-  if (String(qq) === pcOwner()) drawerPut('信', `${dayKey()}.jpg`, card);
+  if (String(qq) === ownerQQ()) use('drawer')?.put('信', `${dayKey()}.jpg`, card);
   log(`写信：${chatKey}（${body.length} 字${paper ? '' : '，素纸'}）`);
   return true;
 }
@@ -3803,7 +3532,7 @@ const PLACES = [
   ['武汉', '东湖', '武汉东湖绿道，湖边的樱花，骑车的小路', [3, 4]],
   ['长沙', '橘子洲', '长沙橘子洲头和湘江，岸边的城市夜景，烟花'],
 ];
-const tripTo = () => String(cfg.proactiveQQ[0] || pcOwner() || '');
+const tripTo = () => String(cfg.proactiveQQ[0] || ownerQQ() || '');
 let tripRunning = false;
 function pickPlace() {
   const m = new Date().getMonth() + 1;
@@ -3853,7 +3582,7 @@ async function sendPostcard(qq, trip, target) {
   const pc = await makePostcard(qq, trip);
   Object.assign(trip, { sent: true, sentAt: Date.now(), card: pc.card });
   saveState();
-  if (String(qq) === pcOwner()) drawerPut('明信片', `${dayKey()}-${trip.city}.jpg`, pc.card);
+  if (String(qq) === ownerQQ()) use('drawer')?.put('明信片', `${dayKey()}-${trip.city}.jpg`, pc.card);
   withLife(() => chrono.commit_virtual_event({ id: `trip:${dayKey()}`, kind: 'trip', content: `这个周末在自己的小世界里去了${trip.city}（${trip.spot}），给对方寄了一张明信片。` }));
   addDiary(`去${trip.city}玩了一趟，给对方寄了张明信片`);
   if (!target && cfg.chronolife) {
@@ -4072,16 +3801,15 @@ const api = {
   persona, memoryFile, readMemory, appendMemory, diaryToday, addDiary,
   online: () => !!ws && ws.readyState === 1, selfId: () => selfId,
   sendRaw, sendMsg, sendPrivate, reply, say, showTyping, recordGroup, segments, textOf, senderName,
-  groupContext, mentions, quotesMe, activeChats,
+  groupContext, mentions, quotesMe, activeChats, batches, owner: () => ownerQQ(),
   runAgent, runQueued, runPyJson, downloadTo, saveImages, humanize, humanBubbles,
-  myState: (...a) => myState(...a), lifeBlock: (...a) => lifeBlock(...a),
+  myState: (...a) => myState(...a), quiet: () => quietNow(), lifeBlock: (...a) => lifeBlock(...a),
   // 过渡用：这几样还在本体里，等对应的组搬走后改成 use('服务')（见 docs/插件接口.md）
   inSleepHours: (...a) => inSleepHours(...a), sleepHour: () => sleepHour(), // 心情和作息（mood）
   doingName: () => doing.name, // 自己找事做（life）
   lifeState: () => (cfg.chronolife ? withLife(() => chrono.get_state(), null) : null), // ChronoLife（life）
   lifeRecentEvents: (q, o) => withLife(() => lifeEvents(chrono.recent_events(q), o), []), // ChronoLife（life）
   selfBlock: () => selfBlock(), composeScenePhoto: (qq) => composeScenePhoto(qq), tripTo: () => tripTo(), // 人设成长、现场照、明信片（life）
-  pcNow: () => pcNow, pcOwner: () => pcOwner(), pcQuiet: () => pcQuiet(), // 电脑室友（pc）
   JOURNAL_RAW, // 日记流水目录（memory）
   on, collect, emit, first, pipe, provide, use, every,
 };
@@ -4141,11 +3869,6 @@ if (cfg.chase) {
   log(`等你回: 问了没回 ${cfg.chaseMinMin}~${cfg.chaseMaxMin} 分钟后有 ${Math.round(cfg.chaseProb * 100)}% 追一句`);
   setInterval(() => checkChase().catch(() => {}), cfg.chaseCheckMs);
 }
-if (cfg.pcBuddy) {
-  log(`电脑室友: 每 ${Math.round(cfg.pcCheckMs / 1000)} 秒看一眼电脑（只看在放的歌、开着的游戏、开机多久、人在不在），只跟 ${pcOwner() || '（没设）'} 提，一天最多主动说 ${cfg.pcMaxDay} 句`);
-  setTimeout(() => checkPc().catch(() => {}), Math.min(30_000, cfg.pcCheckMs));
-  setInterval(() => checkPc().catch(() => {}), cfg.pcCheckMs);
-}
 if (cfg.dream) {
   setTimeout(() => checkDreams().catch(() => {}), Math.min(45_000, cfg.dreamCheckMs));
   setInterval(() => checkDreams().catch(() => {}), cfg.dreamCheckMs);
@@ -4159,15 +3882,7 @@ if (cfg.postcard) {
   log(`旅行明信片: 每 ${cfg.postcardEveryWeeks} 周的周末出去玩一趟，周日下午给 ${tripTo() || '（没设 PROACTIVE_QQ）'} 寄一张（正面用百炼 ${cfg.postcardModel} 画${cfg.chronolife ? '；开着 ChronoLife，等对方来聊天时再给' : ''}）`);
   setInterval(() => checkTrip().catch(() => {}), cfg.postcardCheckMs);
 }
-if (cfg.sleepDrift) log(`作息被带偏: 按 ${pcOwner() || '（没设）'} 最近 7 天几点没动静挪她的睡觉时段（最多晚 ${cfg.sleepDriftMax} 小时、早 1 小时）`);
-if (cfg.speaker || cfg.notes) {
-  log(`电脑上的她: ${[cfg.speaker && '回来时从喇叭打招呼', cfg.notes && '离开久了在桌面留便条'].filter(Boolean).join('、')}（${cfg.pcBuddy ? '' : '没开电脑室友，暂时用不上；'}${cfg.quietHours.join('~')} 点不出声）`);
-}
-if (cfg.drawer) {
-  log(`桌面抽屉: ${drawerDir()}`);
-  drawerSync();
-}
-if (cfg.playMusic) log(`放歌: [放歌:歌名 歌手] → ${fs.existsSync(cfg.qqMusicExe) ? '主人在电脑前就用 QQ 音乐放' : '没找到 QQ 音乐，只发链接'}，不在电脑前发链接（一天最多 ${cfg.playMusicMaxDay} 首）`);
+if (cfg.sleepDrift) log(`作息被带偏: 按 ${ownerQQ() || '（没设）'} 最近 7 天几点没动静挪她的睡觉时段（最多晚 ${cfg.sleepDriftMax} 小时、早 1 小时）`);
 if (cfg.journal) {
   log(`日记: 每天 ${cfg.journalHour} 点后写一篇，聊天时带上最近 ${cfg.journalDays} 天`);
   setInterval(checkJournal, cfg.journalCheckMs);
