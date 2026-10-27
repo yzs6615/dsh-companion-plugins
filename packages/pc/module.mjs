@@ -13,7 +13,7 @@ import { pcSnapshot } from './pc.mjs';
 import { searchSong, pickSong, playInClient, openSongPage, songUrl } from './qqmusic.mjs';
 
 export default function setup(api) {
-  const { cfg, env, log, state, saveState, userState, persona, lifeBlock, appendMemory, say, reply, runAgent, humanize, activeChats, batches, pick, sleep, pace, inSleepHours, ROOT, DATA_DIR } = api;
+  const { cfg, env, log, state, saveState, userState, persona, lifeBlock, appendMemory, say, reply, runAgent, humanize, activeChats, batches, pick, sleep, pace, ROOT, DATA_DIR } = api;
   const { dayKey, speakable } = api.human;
   Object.assign(cfg, {
     // 电脑室友：看得见这台电脑在放什么歌、开着什么游戏、开了多久、人在不在电脑前；只跟电脑的主人提
