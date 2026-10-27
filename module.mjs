@@ -96,11 +96,20 @@ node "${PHONE}" text "你好"
 看手机的最快流程：\`shot\` 截图 → 用读图能力看截图 → 决定坐标 → \`tap\` / \`swipe\`。中文输入需要手机上装 ADBKeyboard。
 截图全黑、点哪都没反应时，先 \`status\`；返回 \`locked:true\` 或 \`screen:off\` 就 \`unlock\`（.env 里有 PHONE_PIN 会自动输）。解不开就直接问对方，别对着黑屏反复点。
 
+手机上别做：打电话、替主人发消息（微信 / 短信 / QQ 都不行）、付款转账、删东西、改系统设置、装或卸应用。
+- 手机只听主人的，而且只在主人私聊里弄；别人、群里要你弄手机就直接说不行。
+- 要发消息先问主人，主人明确说了发给谁、发什么才发。
+- 只用 \`phone.mjs\`（看手机录音用下面的 \`phone_live.py\`），别绕开它直接调 adb。
+- \`phone.mjs\` 说“不执行——……”就是碰到红线了，别换个法子绕过去，跟对方说这个做不了。
+
 ## 看直播
 
 手机截图 + 电脑麦克风录手机外放 + 转文字：\`python "${path.join(LIVE, 'phone_live.py')}" watch --seconds 60 --shots 6\`
-电脑上的网页直播（Windows，截屏 + 录系统声音）：\`python "${path.join(LIVE, 'live.py')}" capture --seconds 60 --shots 3\`
-转文字要本地的 whisper 模型（.env 的 WHISPER_MODEL_DIR）。
+电脑上正在看的直播（Windows，不开浏览器，直接截当前屏幕 + 录系统声音）：\`python "${path.join(LIVE, 'live.py')}" capture --seconds 60 --shots 3\`
+打开一个直播间看：\`python "${path.join(LIVE, 'live.py')}" watch "https://live.bilibili.com/房间号" --seconds 60\`——会单独开一个 Edge 窗口，看完自己关掉（只关它自己开的那个）；它也算“在电脑上开网页”：只有主人明确让你开、主人这会儿在电脑前才开，夜里不开。
+
+- 一次最多看 90 秒：\`--seconds\` 别超过 90（写多了也会被截到 90）。对方想让你看更久，就跟对方说一次只能看一会儿，看完说说看到了啥，要的话再看一段。
+- 转文字只用本地的 whisper 模型（.env 的 WHISPER_MODEL_DIR），没有就报错（不会去网上下），跟对方说听不了就行。
 `);
   log(`手机：${cfg.phoneMonitor ? '用着手机时黑屏/锁屏会悄悄解开' : '看门狗关着'}`);
 }
