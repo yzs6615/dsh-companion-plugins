@@ -21,7 +21,7 @@ export function settings(env, parseList) {
     anniversary: (env.ANNIVERSARY || 'true') !== 'false', // 认识 100 天、生日这种日子
     meetDate: env.MEET_DATE || '', // 手动指定认识的日子：qq:2025-05-15，多个用逗号；不填就用第一次聊天那天
     weather: (env.WEATHER || 'true') !== 'false', // 对方那边的天气（Open-Meteo，免费不要 key）
-    weatherCity: env.WEATHER_CITY || '', // 默认城市；每个人也可以在 QQ 里发 /城市 杭州
+    weatherCity: env.WEATHER_CITY || '', // 默认城市；每个人也可以跟她说“我在杭州”（或者发 /城市 杭州）
     journal: (env.JOURNAL || 'true') !== 'false', // 每天写日记，当长期上下文
     journalHour: Number(env.JOURNAL_HOUR ?? 23), // 几点后写当天的日记（没写成第二天补）
     journalDays: Number(env.JOURNAL_DAYS ?? 7), // 聊天时带最近几天的日记
@@ -92,7 +92,7 @@ export default function setup(api) {
         `- 对方提到了将来某个时间点的事时，才写 followups：ask 是你之后想顺口问的话题（例如“问问考试考得怎么样”），at 是事情发生之后你想问的时间，晚上 8 点前、早上 9 点后。没有就留空数组。\n` +
         `- style 只看“对方”说的话：反复出现的口头禅、语气词、爱用的梗和外号、标点/表情习惯（比如“爱说『草』”“句尾老带『捏』”“喜欢叫你『小笨蛋』”“不爱打标点”）。只写确实出现过两次以上的，每条不超过 20 字，别写你自己的说话方式，别重复已有的。\n` +
         `- 没什么可更新的就输出 {"add":[],"drop":[],"followups":[],"style":[],"styleDrop":[]}。`;
-      const r = await runAgent(prompt, null);
+      const r = await runAgent(prompt, null, { permissionMode: 'read-only' }); // 只要一段 JSON，不用工具
       const out = parseJsonLoose(r.text);
       if (!out) {
         log(`事实提炼：模型没给出可解析的 JSON（${chatKey}）`);
@@ -428,21 +428,34 @@ export default function setup(api) {
   // 回完这一轮：隔几轮提炼一次长期事实（原来在本体 turn:after 的最后）
   api.on('turn:after', (t) => maybeExtractFacts(t.chatKey, t.text), 90);
 
+  /** 记下对方在哪：先查一下这个地方的天气，查不到就不记（抛错）。 */
+  async function saveCity(qq, c) {
+    const w = await getWeather(c);
+    userState(qq).city = c;
+    saveState();
+    return w;
+  }
+  /** 最新一篇日记（只带跟这个人的那行）；还没写过返回空。 */
+  function journalText(chatKey) {
+    const d = journalDays().at(-1);
+    const j = d ? readJournal(d) : null;
+    if (!j) return '';
+    const mine = j.with?.[chatKey] ? `\n跟你：${j.with[chatKey]}` : '';
+    return `${shortDay(d)}\n${j.day}${mine}`;
+  }
+
   // /城市 /生日 /日记：原来在“对方开口”之前、学说话选人和 /别学了 之后，所以挂 message:command，order 排在别的插件命令（默认 100）后面
   api.on('message:command', async (ev, text, msg) => {
     const { chatKey } = msg;
     const cityCmd = text.match(/^\/城市\s*(.*)$/);
     if (cityCmd) {
-      const st = userState(ev.user_id);
       const c = cityCmd[1].trim();
       if (!c) {
         await reply(ev, cityOf(ev.user_id) ? `你在${cityOf(ev.user_id)}啊` : '你还没说你在哪 发 /城市 杭州 这样');
         return true;
       }
       try {
-        const w = await getWeather(c);
-        st.city = c;
-        saveState();
+        const w = await saveCity(ev.user_id, c);
         await reply(ev, `记住了 你在${c}\n${describeWeather(w)}`, { whole: true });
       } catch (err) {
         await reply(ev, `没找到${c}这个地方 换个写法？`);
@@ -457,14 +470,69 @@ export default function setup(api) {
       return true;
     }
     if (text === '/日记') {
-      const d = journalDays().at(-1);
-      const j = d ? readJournal(d) : null;
-      const mine = j?.with?.[chatKey] ? `\n跟你：${j.with[chatKey]}` : '';
-      await reply(ev, j ? `${shortDay(d)}\n${j.day}${mine}` : '还没写过日记', { whole: true });
+      await reply(ev, journalText(chatKey) || '还没写过日记', { whole: true });
       return true;
     }
     return false;
   }, 110);
+
+  // ── 大白话：“我在杭州”“我生日 5 月 20 号”“给我看看你的日记”，她在回复里写 [城市:…] [生日:…] [看日记] ─────────────
+  // 本体抠掉标记、回完这句交到 natural:act 这里办，跟斜杠命令走同一套；她自己已经回过一句了，办成了不另外报“记住了”，办不成补一句。
+  const parseBirthday = (s) => {
+    const m = String(s || '').match(/^(\d{1,2})\s*[-./月]\s*(\d{1,2})[日号]?$/);
+    return m && Number(m[1]) >= 1 && Number(m[1]) <= 12 && Number(m[2]) >= 1 && Number(m[2]) <= 31 ? [Number(m[1]), Number(m[2])] : null;
+  };
+  const cityName = (s) => String(s || '').replace(/[\s，。,.!！?？"“”'‘’]/g, '').slice(0, 20);
+  api.on('natural:act', async (ev, a, { chatKey }) => {
+    if (a.kind === '城市') {
+      const c = cityName(a.body);
+      if (!c) return true;
+      try {
+        await saveCity(ev.user_id, c);
+        log(`大白话城市：${ev.user_id} 在${c}`);
+      } catch (err) {
+        log(`大白话城市：没查到${c}（${err.message}）`);
+        await reply(ev, `诶 ${c}这个地方我没查到 换个写法？`);
+      }
+      return true;
+    }
+    if (a.kind === '生日') {
+      const b = parseBirthday(a.body);
+      if (!b) {
+        log(`大白话生日：看不懂「${a.body.slice(0, 20)}」，没记`);
+        await reply(ev, '你这生日我没看懂 几月几号来着？');
+      } else {
+        userState(ev.user_id).birthday = `${pad2(b[0])}-${pad2(b[1])}`;
+        saveState();
+        log(`大白话生日：${ev.user_id} ${b[0]}-${b[1]}`);
+      }
+      return true;
+    }
+    if (a.kind === '看日记') {
+      const t = journalText(chatKey);
+      if (t) await reply(ev, t, { whole: true });
+      else {
+        log('大白话日记：还没写过，没东西给看');
+        await reply(ev, '诶 我还没写过日记呢');
+      }
+      return true;
+    }
+    return false;
+  });
+  // 记进聊天记忆的一句：答应了什么（下一轮还记得）
+  api.on('natural:note', (a) => {
+    if (a.kind === '城市') return cityName(a.body) ? `（记下了对方在${cityName(a.body)}）` : '';
+    if (a.kind !== '生日') return '';
+    const b = parseBirthday(a.body);
+    return b ? `（记下了对方生日 ${b[0]} 月 ${b[1]} 号）` : '';
+  });
+  api.on('natural:hint', (t) =>
+    (cfg.weather ? '\n- 对方说了自己住哪个城市、人在哪（比如“我在杭州”“我搬去成都了”）：写 [城市:城市名]，以后就知道 TA 那边天气；只是出去玩、路过的不算。' : '') +
+    '\n- 对方告诉你 TA 的生日：写 [生日:月-日]，比如 [生日:5-20]；农历的别写。' +
+    (cfg.journal && journalDays().length ? '\n- 对方想看你的日记、你也愿意给看：写 [看日记]，会把最近一篇发过去。' : ''), 20);
+  api.on('help', () => (cfg.weather ? '\n· “我在杭州”' : ''), 20);
+  api.on('help', () => '\n· “我生日 5 月 20 号”', 25);
+  api.on('help', () => (cfg.journal ? '\n· “给我看看你的日记”' : ''), 90);
 
   // ── 启动和定时（原来在 main 段末尾）────────────────────────────────────────
   api.on('startup', () => backfillMetDays());
@@ -499,9 +567,14 @@ export function features(cfg, { DATA_DIR, state, readJson, esc, when, on }) {
         ['长期事实', on(cfg.facts), `每 ${cfg.factsEvery} 轮提炼一次，提到考试/生日/称呼等要紧事 2 轮后提前`, '让模型把聊天提炼成长期记得的事（每人最多 40 条），以后的对话会带上。', 10],
         ['记得你的作息', on(cfg.rhythm), (() => { const qs = Object.entries(state).filter(([k, v]) => /^\d+$/.test(k) && v?.rhythm); return qs.length ? qs.map(([k, v]) => `${k}：平时 ${clockOfMin(v.rhythm.wake)} 冒头、${clockOfMin(v.rhythm.sleep)} 没动静（${v.rhythm.days} 天）`).join('；') : '聊满 4 天才看得出'; })(), '从聊天时间摸清你平时几点冒头、几点没动静；今天比平时晚睡、早起，她会注意到，顺口说一句（一天只说一次）。', 30],
         ['对你好奇', on(cfg.curious), `每轮 ${Math.round(cfg.curiousProb * 100)}% 提醒她一次，一天最多一次`, '记住的事里还没提到的方面（是干嘛的、住哪、喜欢干嘛、爱吃啥、养没养猫狗、生日），她会找机会自然地问一句，同一个方面一周内不重复。', 40],
-        ['纪念日和天气', on(cfg.anniversary || cfg.weather), cfg.weatherCity ? `默认城市：${cfg.weatherCity}` : '在 QQ 里发 /城市 杭州 告诉她你在哪', '认识第 100 天、周年、你的生日（/生日 5-20）那天她心里知道，上午会主动说一句；你那边下雨、降温、很热很冷时会顺口提醒（天气来自 Open-Meteo，免费）。认识的日子可以在 .env 写 MEET_DATE=QQ号:2025-05-15。', 50],
-        ['日记', on(cfg.journal), (() => { let days = []; try { days = fs.readdirSync(path.join(DATA_DIR, 'journal')).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort(); } catch {} return days.length ? `写了 ${days.length} 篇，最近一篇 ${days.at(-1).slice(0, 10)} · 每天 ${cfg.journalHour} 点后写 · 聊天带最近 ${cfg.journalDays} 天` : `还没写过 · 每天 ${cfg.journalHour} 点后写`; })(), '白天每轮聊天记一行流水（一直留着），睡前用自己的口吻写当天的日记：今天干了啥、什么心情，再给每个聊过的人记一行聊了啥。聊天时带上最近几天的日记，但只带跟这个人的那行，跟 A 聊的不会出现在跟 B 的对话里；更早的只留跟这个人有关的，当长期记忆。/日记 看最新一篇；日记网页（见下面“工具和文件”）能选日期翻、能搜。', 60],
+        ['纪念日和天气', on(cfg.anniversary || cfg.weather), cfg.weatherCity ? `默认城市：${cfg.weatherCity}` : '跟她说“我在杭州”告诉她你在哪（或发 /城市 杭州）', '认识第 100 天、周年、你的生日（跟她说一声就记下，或发 /生日 5-20）那天她心里知道，上午会主动说一句；你那边下雨、降温、很热很冷时会顺口提醒（天气来自 Open-Meteo，免费）。认识的日子可以在 .env 写 MEET_DATE=QQ号:2025-05-15。', 50],
+        ['日记', on(cfg.journal), (() => { let days = []; try { days = fs.readdirSync(path.join(DATA_DIR, 'journal')).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort(); } catch {} return days.length ? `写了 ${days.length} 篇，最近一篇 ${days.at(-1).slice(0, 10)} · 每天 ${cfg.journalHour} 点后写 · 聊天带最近 ${cfg.journalDays} 天` : `还没写过 · 每天 ${cfg.journalHour} 点后写`; })(), '白天每轮聊天记一行流水（一直留着），睡前用自己的口吻写当天的日记：今天干了啥、什么心情，再给每个聊过的人记一行聊了啥。聊天时带上最近几天的日记，但只带跟这个人的那行，跟 A 聊的不会出现在跟 B 的对话里；更早的只留跟这个人有关的，当长期记忆。说“给我看看你的日记”（或发 /日记）看最新一篇；日记网页（见下面“工具和文件”）能选日期翻、能搜。', 60],
       ]],
+    ],
+    natural: [
+      ['“我在杭州”', cfg.weather ? '记下你在哪（看天气用）' : '没开天气', 20],
+      ['“我生日 5 月 20 号”', '记下你的生日', 25],
+      ['“给我看看你的日记”', cfg.journal ? '把她最新一篇日记发给你' : '没开日记', 90],
     ],
     commands: [
       ['/城市 杭州', '告诉她你在哪（看天气用）；单发 /城市 看她记的是哪', 80],
