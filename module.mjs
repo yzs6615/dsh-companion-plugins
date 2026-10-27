@@ -12,10 +12,9 @@ import path from 'node:path';
 import { pcSnapshot } from './pc.mjs';
 import { searchSong, pickSong, playInClient, openSongPage, songUrl } from './qqmusic.mjs';
 
-export default function setup(api) {
-  const { cfg, env, log, state, saveState, userState, persona, lifeBlock, appendMemory, say, reply, runAgent, humanize, activeChats, batches, pick, sleep, pace, ROOT, DATA_DIR } = api;
-  const { dayKey, speakable } = api.human;
-  Object.assign(cfg, {
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     // 电脑室友：看得见这台电脑在放什么歌、开着什么游戏、开了多久、人在不在电脑前；只跟电脑的主人提
     pcBuddy: (env.PC_BUDDY || 'false') === 'true',
     pcMaxDay: Number(env.PC_MAX_DAY ?? 3), // 一天最多因为电脑上的事主动说几句
@@ -31,7 +30,13 @@ export default function setup(api) {
     playMusic: (env.PLAY_MUSIC || 'false') === 'true', // 用电脑上的 QQ 音乐放歌：模型写 [放歌:歌名 歌手]，主人在电脑前就直接放，不在就发链接
     playMusicMaxDay: Number(env.PLAY_MUSIC_MAX_DAY ?? 6),
     qqMusicExe: env.QQMUSIC_EXE || 'C:\\Program Files (x86)\\Tencent\\QQMusic\\QQMusic.exe',
-  });
+  };
+}
+
+export default function setup(api) {
+  const { cfg, env, log, state, saveState, userState, persona, lifeBlock, appendMemory, say, reply, runAgent, humanize, activeChats, batches, pick, sleep, pace, ROOT, DATA_DIR } = api;
+  const { dayKey, speakable } = api.human;
+  Object.assign(cfg, settings(env, api.parseList));
   // PowerShell、桌面、托盘通知、QQ 音乐都只有 Windows 上有
   if (process.platform !== 'win32') {
     log('电脑上的她只支持 Windows');
@@ -343,4 +348,22 @@ export default function setup(api) {
   }
   if (cfg.drawer) log(`桌面抽屉: ${drawerDir()}`); // 以前写的信放进抽屉：本体启动时（startup）用 drawer.put 补一遍
   if (cfg.playMusic) log(`放歌: [放歌:歌名 歌手] → ${fs.existsSync(cfg.qqMusicExe) ? '主人在电脑前就用 QQ 音乐放' : '没找到 QQ 音乐，只发链接'}，不在电脑前发链接（一天最多 ${cfg.playMusicMaxDay} 首）`);
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。
+ */
+export function features(cfg, { on }) {
+  return {
+    groups: [
+      ['电脑上的她', [
+        ['电脑室友', on(cfg.pcBuddy), cfg.pcBuddy ? `只跟 ${cfg.pcOwner || cfg.proactiveQQ[0] || '（没设）'} 提 · 一天最多主动说 ${cfg.pcMaxDay} 句` : '', '她“住在这台电脑里”：看得见电脑上在放什么歌（网易云、QQ音乐、酷狗、Spotify…）、开着什么游戏、电脑开了多久、深夜人还在不在电脑前。聊天时心里知道；一首歌这周放到第 3 遍、凌晨还在打游戏、电脑连开好几天，会像室友一样顺口说一句。只看这几样，别的窗口一概不看；只在私聊里跟电脑的主人提。'],
+        ['电脑喇叭说话', on(cfg.speaker), cfg.speaker ? `一天最多 ${cfg.speakerMaxDay} 句 · ${cfg.quietHours.join('~')} 点不出声` : '', '早上你第一次坐到电脑前、或者离开两个小时以上又回来，她用自己的声音从电脑喇叭说一句（“早”“回来啦 去哪了”）。要开电脑室友和语音；睡觉时段、夜里、ChronoLife 休息时都不出声，两句至少隔一小时。'],
+        ['电脑上留便条', on(cfg.notes), cfg.notes ? `离开 ${cfg.noteAfterMin} 分钟以上 · 一天最多一张` : '', '你离开电脑好几个小时，她偶尔在桌面上留一张“<名字>的便条.txt”，像室友贴门上的纸条（1~3 句，不写私事和聊天内容）；你回来时右下角弹个通知“<名字>给你留了张便条”。夜里不留。'],
+        ['桌面抽屉', on(cfg.drawer), cfg.drawer ? '桌面上“<名字>的抽屉”' : '', '桌面上一个“<名字>的抽屉”文件夹：她写给你的信、寄的明信片、发给你的现场照、梦见你的梦（梦.txt）、留过的便条（便条.txt）、自己找事做时收藏的视频（收藏.txt），都放一份。只放跟电脑的主人有关的。'],
+        ['用 QQ 音乐放歌', on(cfg.playMusic), cfg.playMusic ? (fs.existsSync(cfg.qqMusicExe) ? `QQ 音乐：${cfg.qqMusicExe}` : '没找到 QQ 音乐，只发链接') + ` · 一天最多 ${cfg.playMusicMaxDay} 首` : '', '让她放首歌、或者她夜里想给你放首睡前听的：先在 QQ 音乐搜到这首（挑原版，不挑 Live / 伴奏），你在电脑前（键盘鼠标 5 分钟内动过）就直接在电脑上的 QQ 音乐里放；你不在电脑前就发 QQ 音乐的链接。只在私聊里。'],
+      ]],
+    ],
+  };
 }
