@@ -57,7 +57,6 @@ export const cfg = {
   proactiveQQ: parseList(env.PROACTIVE_QQ || ''),
   proactiveMax: Number(env.PROACTIVE_MAX || 2),
   proactiveIdleHours: Number(env.PROACTIVE_IDLE_HOURS || 8),
-  phoneMonitor: (env.PHONE_MONITOR || 'true') !== 'false',
   autonomy: (env.AUTONOMY || 'false') === 'true',
   autonomyMinutes: Number(env.AUTONOMY_MINUTES || 45), // 两次自己玩之间至少隔多久
   autonomyMax: Number(env.AUTONOMY_MAX || 8), // 一天最多自己玩几次

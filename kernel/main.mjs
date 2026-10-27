@@ -1451,7 +1451,7 @@ async function watchVideo(file, label = '一段视频') {
   const dur = fr?.duration || 0;
   let heard = '';
   if (dur > 0 && dur <= 600) {
-    const asr = await runPyJson([path.join(ROOT, 'live', 'phone_live.py'), 'asr', file, '--model', 'base'], 240_000);
+    const asr = await runPyJson([path.join(ROOT, 'media', 'asr.py'), file, '--model', 'base'], 240_000);
     heard = String(asr?.text || '').trim();
   }
   const sheets = fr?.sheets || [];
@@ -2447,7 +2447,7 @@ const ACTIVITIES = [
   { id: 'weibo', name: '刷微博热搜', w: 2, how: '刷微博热搜：node agent-bridge/life/life.mjs weibo，看看外面今天在吵啥；想细看某个话题可以用 bili.mjs search 搜搜相关视频' },
   { id: 'music', name: '听歌', w: 2, how: '听听歌：node agent-bridge/life/life.mjs music 看看榜单（飙升/热歌/新歌/原创），或者直接 song 歌名 看你想听的那首的歌词和网易云热评' },
   { id: 'foryou', name: '找点对方会喜欢的', w: 2, how: '找找对方可能会喜欢的：照着下面你记得的对方的事（喜欢什么、在忙什么），用 bili.mjs search 或 life.mjs 搜一搜，挑一个你真心觉得 TA 会喜欢的', when: () => cfg.facts && cfg.proactiveQQ.length > 0 && readFacts(`u${cfg.proactiveQQ[0]}`).facts.length >= 2 },
-  { id: 'phone', name: '玩手机', w: 1, how: '玩会儿手机（AGENTS.md 里有手机控制的用法）', when: () => cfg.phoneMonitor && fs.existsSync(path.join(ROOT, '..', 'tools', 'platform-tools', 'adb.exe')) },
+  { id: 'phone', name: '玩手机', w: 1, how: '玩会儿手机（AGENTS.md 里有手机控制的用法）', when: () => !!use('phone') }, // 装了手机插件才玩
 ];
 function pickActivity(a, day) {
   if (!a.did || a.did.day !== day) a.did = { day, ids: [] };
@@ -2619,68 +2619,7 @@ function splitText(text, limit) {
   return out;
 }
 
-// ── phone watchdog ────────────────────────────────────────────────────────
-// 只在它这一轮真的动了手机（phone.mjs / phone_live.py 会记一笔 data/phone-used）之后才盯屏幕：
-// 用着用着黑了/锁了就悄悄解开，不吭声；解不开才说一句。平时聊天手机锁着是正常的，不碰。
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const PHONE_USED_FILE = path.join(DATA_DIR, 'phone-used');
-function phoneUsedAt() {
-  try {
-    return Number(fs.readFileSync(PHONE_USED_FILE, 'utf8')) || 0;
-  } catch {
-    return 0;
-  }
-}
-async function monitorPhone(ev, isRunning) {
-  if (cfg.phoneMonitor === false) return;
-  const startedAt = Date.now();
-  await sleep(8_000);
-  let lastTry = 0;
-  let told = false;
-  while (isRunning()) {
-    const used = phoneUsedAt();
-    // 这一轮没碰过手机，或者已经两分钟没碰了：不管
-    if (used < startedAt || Date.now() - used > 120_000) {
-      await sleep(5_000);
-      continue;
-    }
-    let st = null;
-    try {
-      const out = execFileSync(process.execPath, [path.join(ROOT, 'phone', 'phone.mjs'), 'status'], {
-        cwd: ROOT,
-        encoding: 'utf8',
-        timeout: 10_000,
-        windowsHide: true,
-      });
-      const line = out.trim().split(/\r?\n/).pop();
-      st = JSON.parse(line);
-    } catch {
-      /* adb 不可用/沙箱：静默跳过 */
-    }
-    if (st && (st.screen === 'off' || st.locked) && Date.now() - lastTry > 60_000) {
-      lastTry = Date.now();
-      log(`手机用着用着黑屏/锁屏了，悄悄解锁`);
-      let ok = false;
-      try {
-        const out = execFileSync(process.execPath, [path.join(ROOT, 'phone', 'phone.mjs'), 'unlock'], {
-          cwd: ROOT,
-          encoding: 'utf8',
-          timeout: 20_000,
-          windowsHide: true,
-        });
-        ok = !/还显示锁屏/.test(out);
-      } catch {
-        /* 下面统一处理 */
-      }
-      if (!ok && !told) {
-        told = true;
-        log('手机解锁失败');
-        await reply(ev, pick(['手机锁着 我解不开 你帮我解一下', '手机屏幕锁了 我打不开 帮我解下锁'])).catch(() => {});
-      }
-    }
-    await sleep(10_000);
-  }
-}
 
 // ── Agent invocation ──────────────────────────────────────────────────────
 /** opts.permissionMode：这一次调用单独降权（比如群里插嘴只让它聊天，不让碰工具）。 */
@@ -3356,6 +3295,7 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
       turn.raw = answer;
       turn.spoken = spoken;
       appendMemory(chatKey, text, spoken || '（发了个表情）');
+      await emit('turn:record', turn); // 发之前记账（日记流水……），跟短期记忆同一时刻
       lastAnswer.set(chatKey, { text: spoken, at: Date.now() });
       // 模型自己点了表情就一定发；没点就按梗的概率补一张，别每句都发。
       const slow = Date.now() - tRun > 45_000;
@@ -3386,9 +3326,6 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
 
 
 // 还没搬走的：这一轮里各功能要做的（搬的时候连这几行一起挪）
-on('turn:start', (t) => {
-  monitorPhone(t.ev, t.running).catch(() => {}); // 后台盯着，不等它（它要等这一轮结束才停）
-});
 on('turn:start', (t) => {
   // 攒着的明信片（开着 ChronoLife 时周日寄的）：提示词里让她提一句，回完这轮一起给
   const trip = !t.isGroup && cfg.postcard && String(t.qq) === tripTo() ? state._trips?.cur : null;
@@ -3437,7 +3374,7 @@ on('turn:answer', () => {
 on('turn:spoken', (tags) => (tags.sing !== null && tags.sing !== undefined ? `（唱了一段${tags.sing ? `《${tags.sing}》` : ''}）` : ''), 10);
 on('turn:spoken', (tags, t) => (t.tags.play && cfg.playMusic ? `（放了首歌：${t.tags.play}）` : ''), 20);
 on('turn:spoken', (tags, t) => (t.tags.gift && cfg.photo ? `（收下了对方送的${t.tags.gift}，摆在房间里）` : ''), 30);
-on('turn:after', (t) => logDay(t.chatKey, t.who, t.text, t.spoken || '（发了个表情）'), 5);
+on('turn:record', (t) => logDay(t.chatKey, t.who, t.text, t.spoken || '（发了个表情）'));
 on('turn:after', async (t) => {
   const { ev, chatKey, ids, spoken, isGroup, text } = t;
   withLife(() => { if (chrono.settings().enabled) chrono.record_interaction({ id: `qq:${chatKey}:${ids?.join('-') || Date.now()}:out`, scope: chatKey, text: spoken.slice(0, 2000) || '（表情）', direction: 'out' }); });
