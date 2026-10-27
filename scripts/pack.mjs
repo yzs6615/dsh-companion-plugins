@@ -2,8 +2,8 @@
 /**
  * 打发布用的东西，放 dist/：
  *   dsh-companion-<插件>-<版本>.tgz   每个插件单独的安装包（dsh plugin add 能直接装）
- *   下载器.zip                        只有下载器（装的时候从 GitHub Releases 下插件）
- *   全部插件.zip                      下载器 + 全部安装包（离线装）
+ *   downloader.zip（下载器）           只有下载器（装的时候从 GitHub Releases 下插件）
+ *   all-plugins.zip（全部插件）        下载器 + 全部安装包（离线装）
  * 打完扫一遍：包里不能有 .env、data、persona.md，也不能出现 scripts/private-words.txt 里列的词（QQ 号、名字、key……，这个文件不进仓库）。
  *   node scripts/pack.mjs
  */
@@ -77,13 +77,13 @@ const zip = (from, to) => {
   if (process.platform === 'win32') execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-c', '--options', 'zip:hdrcharset=UTF-8', '-f', to, '-C', from, '.'])
   else execFileSync('zip', ['-qr', to, '.'], { cwd: from })
 }
-zip(dl, path.join(DIST, '下载器.zip'))
+zip(dl, path.join(DIST, 'downloader.zip'))
 const all = path.join(stage, '全部插件')
 // 不用 fs.cpSync：Node 24 在 Windows 上复制中文名的文件夹会直接崩掉（不报错，退出码 127）
 fs.mkdirSync(all)
 for (const f of fs.readdirSync(dl)) fs.copyFileSync(path.join(dl, f), path.join(all, f))
 fs.mkdirSync(path.join(all, 'packages'))
 for (const t of tgzs) fs.copyFileSync(t, path.join(all, 'packages', path.basename(t)))
-zip(all, path.join(DIST, '全部插件.zip'))
+zip(all, path.join(DIST, 'all-plugins.zip'))
 fs.rmSync(stage, { recursive: true, force: true })
-console.log(`\n好了：dist/ 里 ${tgzs.length} 个安装包 + 下载器.zip + 全部插件.zip（v${VERSION}）`)
+console.log(`\n好了：dist/ 里 ${tgzs.length} 个安装包 + downloader.zip + all-plugins.zip（v${VERSION}）`)

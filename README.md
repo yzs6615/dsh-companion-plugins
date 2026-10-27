@@ -43,7 +43,7 @@ dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#speech
 用桌面版的话把 `web` 换成 `desktop`，并且先把桌面版完全退出。
 
 **下载器**：到 [Releases](https://github.com/yzs6615/dsh-companion-plugins/releases) 下载
-`下载器.zip`（装的时候从 GitHub 拉插件）或 `全部插件.zip`（带全部安装包，不联网也能装），解压后双击 `安装.cmd`
+`downloader.zip`（下载器，装的时候从 GitHub 拉插件）或 `all-plugins.zip`（全部插件，带全部安装包，不联网也能装），解压后双击 `安装.cmd`
 （Linux / Mac：`node downloader.mjs`），回车装全部，或者写编号挑着装。
 
 **单个安装包**：Releases 里每个插件有自己的 `dsh-companion-<插件>-<版本>.tgz`，下载后 `dsh plugin --profile web add <文件路径>`。
