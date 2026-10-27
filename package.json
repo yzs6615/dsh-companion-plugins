@@ -13,7 +13,10 @@
     "README.md",
     "cordis.patch.yml",
     "index.js",
-    "module.mjs"
+    "module.mjs",
+    "sing",
+    "stickers.mjs",
+    "tts.mjs"
   ],
   "engines": {
     "node": ">=22"
