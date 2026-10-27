@@ -1,6 +1,6 @@
 """挑画面、拼图版（思路参考 video-watch-plus：先量“哪里变了”，再挑帧拼成图版；只用 PyAV + Pillow + numpy）。
 
-python bili/frames.py plan.json
+python media/frames.py plan.json
 
 plan.json：
   {"segments": [{"file", "start", "end", "kind": "peak"|"even"|"whole", "target"?, "note"?}, ...],
