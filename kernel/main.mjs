@@ -29,11 +29,6 @@ import {
   looksLikeQuestion,
   chooseActivity,
   extractMoodTag,
-  moodHours,
-  EVENT_MOODS,
-  computeRhythm,
-  sleepDrift,
-  clockOf,
   parseJsonLoose,
 } from './human.mjs';
 import { cfg, env, parseList, HOME } from './config.mjs';
@@ -337,20 +332,21 @@ function addDiary(text, shared = '') {
   saveState();
 }
 
-// 作息被带偏（SLEEP_DRIFT）：按电脑主人最近 7 天几点没动静算出挪几个小时（见下面 rhythm:times），睡觉时段整体跟着挪
-const sleepShift = () => (cfg.sleepDrift ? state._sleepDrift?.shift || 0 : 0);
-const sleepHour = () => (cfg.sleepStart + sleepShift() + 24) % 24;
-const wakeHour = () => (cfg.sleepEnd + sleepShift() + 24) % 24;
-function inSleepHours(h = new Date().getHours()) {
-  const a = sleepHour();
-  const b = wakeHour();
+// 睡觉时段：心情和作息（mood 插件）管，作息被带偏（SLEEP_DRIFT）时会整体挪；
+// 没装就按 SLEEP_START~SLEEP_END 固定（跟原来没开 SLEEP_DRIFT 时一样）
+const sleepSpan = () => {
+  const m = use('mood');
+  return m ? [m.sleepHour(), m.wakeHour()] : [(cfg.sleepStart + 24) % 24, (cfg.sleepEnd + 24) % 24];
+};
+function asleep(h = new Date().getHours()) {
+  const [a, b] = sleepSpan();
   return a <= b ? h >= a && h < b : h >= a || h < b;
 }
 /** 现在该不该安静：睡觉时段、QUIET_HOURS（默认 23~9 点），或者 ChronoLife 在休息 / 停用。插件主动出声、发东西前都看这个。 */
 function quietNow() {
   const h = new Date().getHours();
   const [a, b] = cfg.quietHours;
-  if (inSleepHours(h) || (a !== b && (a < b ? h >= a && h < b : h >= a || h < b))) return true;
+  if (asleep(h) || (a !== b && (a < b ? h >= a && h < b : h >= a || h < b))) return true;
   const life = cfg.chronolife ? withLife(() => chrono.get_state(), null) : null;
   return !!life && (life.mode === 'rest' || life.mode === 'disabled');
 }
@@ -472,10 +468,7 @@ function lifeBlock(qq) {
     `\n（这是你自己心里的感觉，带着它说话就行；别念出来，也别提“状态”“熟悉度”这类词。）`
   );
 }
-on('prompt:state', (qq) =>
-  qq && sleepShift() && String(qq) === ownerQQ()
-    ? `\n你最近被对方带得${sleepShift() > 0 ? '睡晚了' : '早睡了'}，现在大概 ${sleepHour()} 点才犯困（对方最近 ${state._sleepDrift?.ownerSleep || '?'} 左右才没动静）；偶尔可以抱怨一句“都怪你”。`
-    : '', 10);
+// 作息被带偏那句（10）在心情和作息（mood）插件里
 on('prompt:state', () => lifeNowBlock(), 30);
 
 // ── ChronoLife 放进提示词的部分：只放事情本身和多久以前，不放编号、来源、可信度这些 ─────────────
@@ -535,7 +528,6 @@ function groupContext(groupId, excludeIds = [], limit = 10) {
     .join('\n');
 }
 
-const MOOD_TAG_HINT = '\n（聊着聊着心情真变了——被夸、被怼、听到好消息坏消息、对方难过——就在回复最后加个 [心情:心情词|为啥]，不会发出去；心情词只能用：开心、兴奋、平静、无聊、懒、嘴贫、烦、有点丧、委屈、生气、困。没变就别加。）';
 function buildPrompt(ev, text, isGroup, chatKey, excludeIds = []) {
   const head = persona();
   if (!head) return text;
@@ -557,18 +549,11 @@ on('prompt:context', () => busyBlock(), 80);
 on('prompt:context', (t) => (t.isGroup ? '' : dreamBlock(t.chatKey)), 100);
 on('prompt:context', (t) => (t.isGroup ? '' : tripBlock(t.qq)), 110);
 on('prompt:context', (t) => (t.isGroup ? '' : giftBlock(t.qq)), 120);
-on('prompt:context-late', (t) => sulkBlockOf(t.qq), 180);
 on('context:filter', (text, chatKey) => (chronoAdapter ? chronoAdapter.filter(chatKey, text) : cfg.chronolife ? '' : text));
 on('prompt:after', (t) => lifeNotesBlock(t.chatKey));
-on('prompt:hint', () => (cfg.emotion ? MOOD_TAG_HINT : ''), 10);
 on('prompt:hint', (t) => photoHint(t.text, t.isGroup), 20);
 on('prompt:hint', (t) => giftHint(t.text, t.isGroup), 30);
 on('help', () => (cfg.radio ? '\n想听电台就说“开台，聊聊下雨天”（/电台 帮助 看玩法）' : ''));
-
-function sulkBlockOf(qq) {
-  const sulk = cfg.chronolife ? 0 : userState(qq).sulk || 0;
-  return sulk ? `\n\n---\n你之前主动找过对方 ${sulk} 次，对方都没理你，现在才冒出来。可以带一点小情绪（阴阳一句、假装不在意、委屈一下都行），一两句就过去，别真生气、别翻旧账。` : '';
-}
 
 // ── OneBot helpers ────────────────────────────────────────────────────────
 function decodeCQ(s) {
@@ -1157,30 +1142,18 @@ async function sendPrivate(qq, text) {
   });
 }
 
-// ── 心情有来由、会延续 ───────────────────────────────────────────────────
-// 聊天、自己找事做时，模型觉得心情变了就在最后写 [心情:词|为啥]（不发出去）→ 这个心情持续几个小时（moodHours），
-// 期间“此刻”、在线状态、/心情、想不想玩都跟着它走；过了就回到按时段的日常心情。
-// 凌晨 1~5 点还在聊：第二天 7 点到中午犯困（昨晚熬夜了）。
-// 为啥心情变了只告诉“惹出这事的那个聊天”，别的人只看得到心情本身。
-function setEmotion(mood, reason, chatKey = '') {
+// ── 心情 ─────────────────────────────────────────────────────────────────
+// 聊天、自己找事做时，模型觉得心情变了就在最后写 [心情:词|为啥]（本体抠掉，不发出去）。
+// 开着 ChronoLife 先让它记一笔（“没回”“冷落”这种它自己管，不算）；心情有来由、会延续几个小时在心情和作息（mood 插件）里，没装就只有 ChronoLife 那笔。
+function moodChanged(mood, reason, chatKey = '') {
   if (cfg.chronolife && /(?:没|不).*回|冷落|不理/.test(reason || '')) return;
   if (cfg.chronolife) withLife(() => chrono.set_emotion({ valence: ['开心', '兴奋', '嘴贫'].includes(mood) ? .8 : ['烦', '有点丧', '委屈', '生气'].includes(mood) ? .3 : .6, arousal: ['兴奋', '生气'].includes(mood) ? .8 : mood === '困' ? .2 : .5, curiosity: mood === '无聊' ? .8 : .6, reason, scope: chatKey || 'global' }));
-  if (!cfg.emotion || !EVENT_MOODS.includes(mood)) return;
-  const now = Date.now();
-  state._emotion = { mood, reason: String(reason || '').slice(0, 40), chatKey, from: now, until: now + moodHours(mood) * 3600_000 };
-  saveState();
-  log(`心情：${mood}${reason ? `（${reason}）` : ''}`);
-  use('presence')?.update().catch(() => {});
-  use('presence')?.updateAvatar().catch(() => {});
+  use('mood')?.setEmotion(mood, reason, chatKey);
 }
-function markStayedUp() {
-  const h = new Date().getHours();
-  if (!cfg.emotion || h < 1 || h >= 5) return;
-  const wake = new Date();
-  wake.setHours(7, 0, 0, 0);
-  state._tired = { from: wake.getTime(), until: wake.getTime() + 5 * 3600_000 };
-}
-/** 现在的她：按时段的日常心情，被事情影响了就换成那个心情（chatKey 是那件事的聊天才告诉为啥）。 */
+/**
+ * 现在的她：按时段的日常心情（开着 ChronoLife 就跟着它）；被事情影响了的心情、熬夜后犯困由心情和作息（mood 插件）在 state:mood 里换上
+ * （chatKey 是那件事的聊天才告诉为啥）。没装 mood 就只有按时段的。
+ */
 function myState(chatKey = '') {
   const s = selfState();
   const life = cfg.chronolife ? withLife(() => chrono.get_state(), null) : null;
@@ -1191,33 +1164,8 @@ function myState(chatKey = '') {
     if (life.emotionReason && (life.emotionScope === 'global' || life.emotionScope === chatKey)) s.reason = life.emotionReason;
     return s;
   }
-  const now = Date.now();
-  const e = state._emotion;
-  const t = state._tired;
-  if (cfg.emotion && e && now >= e.from && now < e.until) {
-    s.mood = e.mood;
-    if (e.reason && (!e.chatKey || e.chatKey === chatKey)) s.reason = e.reason;
-  } else if (cfg.emotion && t && now >= t.from && now < t.until) {
-    s.mood = '困';
-    s.reason = '昨晚熬夜了';
-    s.energy = Math.min(s.energy, 0.35);
-    s.energyDesc = '有点没精神，懒得多说';
-  }
-  return s;
+  return pipe('state:mood', s, chatKey);
 }
-
-// 作息被带偏：记得你（memory 插件）按 bridge.log 算完大家的作息，把按 QQ 分好的消息时间交给这里（它算完才 saveState）。
-// 电脑主人最近 7 天几点没动静 → 她的睡觉时段跟着挪（至少要有 3 天的数据）。没装 memory 就不再挪（停在上次算的）
-on('rhythm:times', (per) => {
-  if (cfg.sleepDrift) {
-    const owner = ownerQQ();
-    const recent = computeRhythm((per.get(owner) || []).filter((t) => Date.now() - t < 7 * 86400_000), 3);
-    const shift = recent ? sleepDrift(cfg.sleepStart, recent.sleep, cfg.sleepDriftMax) : 0;
-    const prev = state._sleepDrift?.shift || 0;
-    state._sleepDrift = { shift, ownerSleep: recent ? clockOf(recent.sleep) : '', at: Date.now() };
-    if (shift !== prev) log(`作息：${shift > 0 ? `被带得晚睡 ${shift} 小时` : shift < 0 ? `被带得早睡 ${-shift} 小时` : '回到原来的点'}（对方最近 ${state._sleepDrift.ownerSleep || '?'} 左右没动静）`);
-  }
-});
 
 // ── 被打断时说自己在干嘛 ──────────────────────────────────────────────────
 const doing = { name: '', at: 0 };
@@ -1302,7 +1250,7 @@ async function checkAutonomy() {
     const prompt = `${persona()}${lifeBlock(qq)}${selfBlock()}\n\n---\n现在没人找你，你自己待着，没人管。\n这会儿你想${act.name}：${act.how}\n（真不想干这个也可以换别的：${others}、翻翻笔记、想想有什么好玩的。）最近在追、在迷的东西可以去看看有没有更新，也可以随便逛逛发现点新的。${forYou}\n最多折腾 5-10 分钟，别没完没了，也别改重要文件。\n如果看到好玩的、想分享的，就用 1-2 句发给对方；不想说就只输出 [SILENT]。\n不管说不说，最后都另起一行用 [日记:干了啥、看到了什么、你觉得怎么样] 记一笔，写具体点，有记住的梗、喜欢或讨厌的点也写上（比如 [日记:刷B站看了个修猫爬架的视频，UP主嘴特贫，笑死，弹幕都在刷『典』]）。对方看不到，这是你自己的备忘，以后被问“刚在干嘛”要对得上，睡前也会回想。\n看完心情要是变了（刷到好笑的、看哭了、被气到），再加一个 [心情:心情词|为啥]（心情词：开心、兴奋、平静、无聊、懒、嘴贫、烦、有点丧、委屈、生气、困）。\n不要问“需要我做什么”，不要汇报计划。`;
     const r = await runAgent(prompt, null);
     const mt = extractMoodTag(r.text);
-    if (mt.mood) setEmotion(mt.mood, mt.reason);
+    if (mt.mood) moodChanged(mt.mood, mt.reason);
     const { text: body, diary } = extractDiary(mt.text);
     const text = humanize(body).trim();
     addDiary(diary, text && !text.includes('[SILENT]') ? text : '');
@@ -1730,11 +1678,8 @@ async function handleEvent(ev) {
   // ── 小互动命令（不调模型，省钱）─────────────────────────────────────
   const st = userState(ev.user_id);
   st.lastUserAt = Date.now();
-  // 主动找了对方、隔了好久（默认 2 小时）才回，这一轮带点小情绪；刚发完马上回的不算被冷落
-  if (cfg.chronolife) st.sulk = 0;
-  else if (st.ignored && cfg.sulk && Date.now() - (st.lastProactiveAt || 0) > cfg.sulkAfterMin * 60_000) st.sulk = st.ignored;
-  st.ignored = 0;
-  await emit('message:user', ev, st, msg); // 对方开口了（清“没回”计数、记作息……），saveState 在下面
+  await emit('message:user', ev, st, msg); // 对方开口了（被冷落的小情绪……），saveState 在下面
+  st.ignored = 0; // “主动找了几次没回”清零。放在 message:user 后面：被冷落（mood 插件）要看清零前的数
   const today = dayKey();
   if (st.lastDay !== today) {
     st.lastDay = today; // 每天头一次说话算一天，混得越久越熟
@@ -1850,7 +1795,7 @@ function noteBusy(chatKey, ev) {
 const IMG_ONLY = '（发来图片）';
 
 function sleepDelayMs() {
-  if (!inSleepHours() || !cfg.sleepDelayProb || Math.random() >= cfg.sleepDelayProb) return 0;
+  if (!asleep() || !cfg.sleepDelayProb || Math.random() >= cfg.sleepDelayProb) return 0;
   return Math.round(60_000 + Math.random() * 240_000);
 }
 let markReadFails = 0;
@@ -1997,7 +1942,6 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
       await emit('turn:after', turn); // 回完之后插件要做的（拍照、放歌、收礼物、追问、点电台、提炼事实……）
       const st = userState(ev.user_id);
       st.turns += 1;
-      st.sulk = 0; // 小情绪只带这一轮
       saveState();
     } catch (err) {
       log(`任务失败 ${who}: ${err.message}`);
@@ -2021,8 +1965,9 @@ on('turn:start', (t) => {
   t.giveCard = trip?.pending || null;
 });
 on('turn:answer', (answer, t) => {
+  // [心情:词|为啥]：本体抠掉（没装心情和作息插件也不会原样发出去），心情交给 moodChanged
   const mt = extractMoodTag(answer);
-  if (mt.mood) setEmotion(mt.mood, mt.reason, t.chatKey);
+  if (mt.mood) moodChanged(mt.mood, mt.reason, t.chatKey);
   return mt.text || '[表情:开心]';
 }, 20);
 on('turn:answer', (answer, t) => {
@@ -2041,9 +1986,6 @@ on('turn:answer', (answer, t) => {
   t.tags.gift = answer.match(/\[收礼物[:：]\s*([^\]]+?)\s*\]/)?.[1] || '';
   return answer.replace(/\[收礼物[:：][^\]]*\]/g, '').trim() || '谢谢 我收下了';
 }, 60);
-on('turn:answer', () => {
-  markStayedUp();
-}, 70);
 on('turn:spoken', (tags, t) => (t.tags.gift && cfg.photo ? `（收下了对方送的${t.tags.gift}，摆在房间里）` : ''), 30);
 on('turn:after', async (t) => {
   const { ev, chatKey, ids, spoken, isGroup } = t;
@@ -2079,7 +2021,7 @@ on('turn:after', async (t) => {
 let dreamRunning = false;
 async function checkDreams() {
   const h = new Date().getHours();
-  if (!cfg.dream || dreamRunning || h < wakeHour() || h >= cfg.dreamUntil) return;
+  if (!cfg.dream || dreamRunning || h < sleepSpan()[1] || h >= cfg.dreamUntil) return;
   dreamRunning = true;
   try {
     const today = dayKey();
@@ -2211,7 +2153,7 @@ function pickScene(qq) {
   if (/雨/.test(wx)) light = night ? 'rain-night' : 'rain-day';
   else if (/雪/.test(wx) && !night) light = 'snow';
   let pose;
-  if (inSleepHours(h)) pose = 'sleeping';
+  if (asleep(h)) pose = 'sleeping';
   else if (doing.name) pose = /听歌|电台/.test(doing.name) ? 'radio' : 'phone';
   else if (h === 12 || h === 18) pose = 'eat';
   else pose = POSE_FOR_MOOD[myState(`u${qq}`).mood] || 'look';
@@ -2558,7 +2500,6 @@ const api = {
   runAgent, runQueued, runPyJson, downloadTo, saveImages, humanize, humanBubbles,
   myState: (...a) => myState(...a), quiet: () => quietNow(), lifeBlock: (...a) => lifeBlock(...a),
   // 过渡用：这几样还在本体里，等对应的组搬走后改成 use('服务')（见 docs/插件接口.md）
-  inSleepHours: (...a) => inSleepHours(...a), sleepHour: () => sleepHour(), // 心情和作息（mood）
   doingName: () => doing.name, // 自己找事做（life）
   lifeState: () => (cfg.chronolife ? withLife(() => chrono.get_state(), null) : null), // ChronoLife（life）
   lifeRecentEvents: (q, o) => withLife(() => lifeEvents(chrono.recent_events(q), o), []), // ChronoLife（life）
@@ -2605,7 +2546,6 @@ if (cfg.postcard) {
   log(`旅行明信片: 每 ${cfg.postcardEveryWeeks} 周的周末出去玩一趟，周日下午给 ${tripTo() || '（没设 PROACTIVE_QQ）'} 寄一张（正面用百炼 ${cfg.postcardModel} 画${cfg.chronolife ? '；开着 ChronoLife，等对方来聊天时再给' : ''}）`);
   setInterval(() => checkTrip().catch(() => {}), cfg.postcardCheckMs);
 }
-if (cfg.sleepDrift) log(`作息被带偏: 按 ${ownerQQ() || '（没设）'} 最近 7 天几点没动静挪她的睡觉时段（最多晚 ${cfg.sleepDriftMax} 小时、早 1 小时）`);
 if (cfg.reflect) {
   log(`人设成长: 每天 ${cfg.reflectHour} 点后回想一次自主活动的经历`);
   setInterval(checkReflection, cfg.reflectCheckMs);

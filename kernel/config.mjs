@@ -74,29 +74,24 @@ export const cfg = {
   typingMsPerChar: Number(env.TYPING_MS_PER_CHAR ?? 130), // 0 关闭打字延迟
   inputStatus: (env.INPUT_STATUS || 'true') !== 'false', // 让对方看到“正在输入”
   markRead: (env.MARK_READ || 'true') !== 'false',
-  sleepStart: Number(env.SLEEP_START ?? 1),
+  sleepStart: Number(env.SLEEP_START ?? 1), // 睡觉时段 SLEEP_START~SLEEP_END 点；作息被带偏（心情和作息 mood 插件）会整体挪
   sleepEnd: Number(env.SLEEP_END ?? 7),
   sleepDelayProb: Number(env.SLEEP_DELAY_PROB ?? 0.5), // 睡觉时段慢回的概率，0 关闭
   typoProb: Number(env.TYPO_PROB ?? 0.04),
   react: (env.REACT || 'true') !== 'false', // “嗯嗯/哈哈”点表情回应，不调模型
   reactProb: Number(env.REACT_PROB ?? 0.7),
   ignoreLimit: Number(env.IGNORE_LIMIT ?? 2), // 主动找了几次都没回，就先不找了（等对方开口）
-  sulk: (env.SULK || 'true') !== 'false', // 被冷落后对方再开口，第一句带点小情绪
-  sulkAfterMin: Number(env.SULK_AFTER_MIN ?? 120), // 主动消息发出后隔多久才回算“被冷落”
   reflect: (env.REFLECT || 'true') !== 'false', // 生活 → 反思 → 人设成长
   // 深夜电台：点一期，她录两三分钟的语音节目（节目卡 + 推荐一首歌）。没开语音就发文字版
   radio: (env.RADIO || 'true') !== 'false',
   radioMaxDay: Number(env.RADIO_MAX_DAY ?? 6), // 一天最多录几期（重播不算）
   radioVoiceSec: Number(env.RADIO_VOICE_SEC ?? 58), // 拼成的每条语音最长几秒
   radioCollectMs: Number(env.RADIO_COLLECT_MS ?? 6000), // 投稿连发几条：最后一条之后等这么久再开录
-  emotion: (env.EMOTION || 'true') !== 'false', // 心情有来由、会延续（模型写 [心情:词|为啥]）
   autonomyHours: (env.AUTONOMY_HOURS || '10-23').split('-').map(Number), // 自己找事做的时段
   autonomyRollWindowMin: Number(env.AUTONOMY_ROLL_WINDOW_MIN ?? 45), // 每小时在前多少分钟里随机掷骰子
   autonomyCheckMs: Number(env.AUTONOMY_CHECK_MS ?? 300_000),
   recall: (env.RECALL || 'true') !== 'false', // 对方撤回：没回的那条就不回了；熟人偶尔调侃一句
   recallTeaseProb: Number(env.RECALL_TEASE_PROB ?? 0.5),
-  sleepDrift: (env.SLEEP_DRIFT || 'false') === 'true', // 作息被带偏：电脑的主人最近老熬夜 / 早睡，她的睡觉时段跟着挪
-  sleepDriftMax: Number(env.SLEEP_DRIFT_MAX ?? 2), // 最多被带晚几个小时（带早最多 1 小时）
   pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）。主人是谁本体也要用（写信、明信片、作息被带偏…），电脑上的她那些设置在 pc 插件里
   // 做梦：早上醒来有时记得昨晚的梦（最近的事拼的），今天第一次聊天、或者早安时顺口说
   dream: (env.DREAM || 'false') === 'true',
