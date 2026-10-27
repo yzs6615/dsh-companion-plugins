@@ -14,11 +14,9 @@ import { genImage } from './imagegen.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export default function setup(api) {
-  const { cfg, env, log, state, saveState, userState, closeness, persona, lifeBlock, readMemory, appendMemory, addDiary } = api;
-  const { reply, say, sendRaw, sendMsg, runAgent, runPyJson, humanize, activeChats, batches, myState, pick, sleep, pace, DATA_DIR } = api;
-  const { dayKey, familiarity, askedSomething, isLeaving, parseJsonLoose } = api.human;
-  Object.assign(cfg, {
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     proactive: (env.PROACTIVE || 'false') === 'true',
     proactiveMax: Number(env.PROACTIVE_MAX || 2),
     proactiveIdleHours: Number(env.PROACTIVE_IDLE_HOURS || 8),
@@ -44,7 +42,14 @@ export default function setup(api) {
     letterCheckMs: Number(env.LETTER_CHECK_MS ?? 600_000),
     // 百炼画图用哪个模型：信纸用它；收到的礼物（她自己的生活，life 插件）也读这个环境变量，两边各读一遍，一样的
     letterModel: env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
-  });
+  };
+}
+
+export default function setup(api) {
+  const { cfg, env, log, state, saveState, userState, closeness, persona, lifeBlock, readMemory, appendMemory, addDiary } = api;
+  const { reply, say, sendRaw, sendMsg, runAgent, runPyJson, humanize, activeChats, batches, myState, pick, sleep, pace, DATA_DIR } = api;
+  const { dayKey, familiarity, askedSomething, isLeaving, parseJsonLoose } = api.human;
+  Object.assign(cfg, settings(env, api.parseList));
   // 长期事实（记得你，memory 插件）：没装就当什么都不记得
   const readFacts = (chatKey) => api.use('facts')?.readFacts(chatKey) || { facts: [], followups: [], style: [] };
   const writeFacts = (chatKey, data) => api.use('facts')?.writeFacts(chatKey, data);
@@ -437,4 +442,23 @@ export default function setup(api) {
     log(`写信: 每周${WEEKDAYS[cfg.letterWeekday] || '日'} ${cfg.letterHour} 点后给 ${cfg.proactiveQQ.join('、') || '（没设 PROACTIVE_QQ）'} 写一封（信纸用百炼 ${cfg.letterModel} 画）`);
     api.every(cfg.letterCheckMs, () => checkLetter().catch(() => {}));
   }
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。“主动找你”这组里 ChronoLife 主动分享（life）排在最前面（order 10）。
+ */
+export function features(cfg, { on }) {
+  return {
+    groups: [
+      ['主动找你', [
+        ['早安 / 晚安 / 冒泡', on(cfg.proactive && cfg.greetings), `每天最多 ${cfg.proactiveMax} 条 · ${cfg.proactiveIdleHours} 小时没动静可能冒个泡`, '早上、晚上掷骰子决定今天说不说；内容由模型现写。', 20],
+        ['回访', on(cfg.followup && cfg.facts && cfg.proactive), `${cfg.followupHours.join('–')} 点 · 只找 ${cfg.proactiveQQ.join(', ') || '（没配 PROACTIVE_QQ）'} · 隔 2 小时以上`, '对方提到将来的事（考试、面试…），事后到点顺口问一句；超过 36 小时就不问了。', 30],
+        ['主动戳你', on(cfg.pokeSelf), '一天最多一次', `白天你 ${cfg.pokeSelfIdleMin} 分钟以上没动静、她没在睡觉的时候，偶尔在 QQ 里戳你一下，什么都不说；无聊、嘴贫的时候更想戳。戳完会记进日记，你问“戳我干嘛”她对得上。`, 40],
+        ['等你回', on(cfg.chase), `问了没回 ${cfg.chaseMinMin}~${cfg.chaseMaxMin} 分钟后 ${Math.round(cfg.chaseProb * 100)}% 会追一句`, '她问了你一句、你半天没回，偶尔追一句“人呢”“？”，熟了会说“已读不回是吧”；一个问题最多追一次。你说了去洗澡、睡了、上课这种就不追，半夜也不追。', 50],
+        ['每周一封信', on(cfg.letter), `每周${'日一二三四五六'[cfg.letterWeekday] || '日'} ${cfg.letterHour} 点后`, '每周给你写一封信，聊聊这一周你们之间的事：信纸用百炼通义万相画（按季节换花样，不写字，一张一两毛钱），字用手写体排上去，角上盖个小章；画不成就用素纸。发 /信 可以马上写一封（算这周的）。', 60],
+      ]],
+    ],
+    commands: [['/信', '马上给你写一封信（算这周的；只在私聊）', 120]],
+  };
 }
