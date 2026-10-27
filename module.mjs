@@ -9,14 +9,15 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { speak } from './tts.mjs';
 import { pickByMeaning, readIndex, writeIndex } from './stickers.mjs';
 
-export default function setup(api) {
-  const { cfg, env, log, readJson, pick, sleep, pace, state, DATA_DIR } = api;
-  const { sendRaw, sendMsg, reply, recordGroup, textOf, runAgent } = api;
-  const { dayKey, speakable, VOICE_TONES, MOOD_TONE, parseJsonLoose } = api.human;
-  Object.assign(cfg, {
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     learnStyle: (env.LEARN_STYLE || 'true') !== 'false', // 学对方的口头禅/说话习惯（跟长期事实一起提炼，不多花调用）
     stealStickers: (env.STEAL_STICKERS || 'true') !== 'false', // 对方发的表情包，觉得好玩就收进自己的表情库
     stealMax: Number(env.STEAL_MAX ?? 40), // 每种情绪最多留几张收来的
@@ -36,7 +37,14 @@ export default function setup(api) {
     // 唱歌：data/songs/<歌名>/ 里提前转好的片段（sing/render.py 生成），发 QQ 语音
     sing: (env.SING || 'true') !== 'false',
     singMaxDay: Number(env.SING_MAX_DAY ?? 6), // 一天最多唱几段（/唱歌 命令不算）
-  });
+  };
+}
+
+export default function setup(api) {
+  const { cfg, env, log, readJson, pick, sleep, pace, state, DATA_DIR } = api;
+  const { sendRaw, sendMsg, reply, recordGroup, textOf, runAgent } = api;
+  const { dayKey, speakable, VOICE_TONES, MOOD_TONE, parseJsonLoose } = api.human;
+  Object.assign(cfg, settings(env, api.parseList));
   // BRIDGE_DATA / STICKER_DIR 让测试能用临时目录，不碰真实数据。
   const STICKER_DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(DATA_DIR, 'stickers');
   const SONG_DIR = env.SONG_DIR ? path.resolve(env.SONG_DIR) : path.join(DATA_DIR, 'songs');
@@ -595,4 +603,44 @@ export default function setup(api) {
     }
     return false;
   });
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。
+ */
+export function features(cfg, { env, ROOT, DATA_DIR, readJson, on }) {
+  const STICKER_DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(DATA_DIR, 'stickers');
+  const SONG_DIR = env.SONG_DIR ? path.resolve(env.SONG_DIR) : path.join(DATA_DIR, 'songs');
+  let stickers = 0;
+  let learnedStickers = 0;
+  try {
+    // 只数情绪子目录；stickers 下面还有 README.md 之类的文件，不能当目录读
+    for (const d of fs.readdirSync(STICKER_DIR, { withFileTypes: true }).filter((e) => e.isDirectory())) {
+      const files = fs.readdirSync(path.join(STICKER_DIR, d.name)).filter((f) => /\.(png|jpe?g|gif|webp)$/i.test(f));
+      stickers += files.length;
+      learnedStickers += files.filter((f) => f.startsWith('learned-')).length;
+    }
+  } catch {
+    /* no stickers */
+  }
+  return {
+    groups: [
+      ['说话的样子', [
+        ['表情包', on(stickers > 0), `${stickers} 张（其中 ${learnedStickers} 张是从聊天里收的）· 模型没点表情时 35% 概率按梗补一张`, '一条回复最多一张，发在文字后面。'],
+        ['表情包按意思挑', 'on', `${Object.keys(readJson(path.join(STICKER_DIR, 'index.json'), {})).length} 张有描述`, `每张表情图配了一句“画面：用法”的描述（node "${path.join(ROOT, 'scripts', 'sticker-index.mjs')}" 让模型看图写），她想表达“无语翻白眼”“笑到打滚”就挑最贴的那张；对不上就不硬发。新收的表情包会自己补描述。`],
+        ['偷表情包', on(cfg.stealStickers), `每种情绪最多留 ${cfg.stealMax} 张收来的 · 发表情时一半机会用收来的`, '对方发的表情包（只认 QQ 标成表情的图，普通照片不收），它觉得好玩就按情绪收进自己的表情库，以后自己也用。'],
+        ['学说话', on(cfg.learnStyle && cfg.facts), '和长期事实一起提炼，不多花模型调用', '从聊天里学对方的口头禅、语气词、爱用的梗，偶尔学着用（越熟越容易被带跑偏）。'],
+        ['学某个人说话', on(cfg.mimic), (() => { const m = readJson(path.join(DATA_DIR, 'mimic.json'), {}).active; if (!m) return '没在学谁：把一段聊天合并转发给它，回序号选人'; const k = Math.max(0.15, Math.min(1, cfg.mimicRampDays > 0 ? (Date.now() - m.startedAt) / 86400_000 / cfg.mimicRampDays : 1)); return `在学「${m.name}」· 大概 ${Math.round(k * 10)} 成（${cfg.mimicRampDays} 天学到位）· 习惯：${(m.traits || []).join('；')}`; })(), '合并转发聊天记录给它 → 选一个人 → 总结 TA 的说话习惯，按天数慢慢带进自己的语气；不冒充那个人、不搬原话里的私事。/学说话 看进度，/别学了 停掉并删掉素材。'],
+        ['发语音', on(cfg.voice), cfg.voice ? `百炼 CosyVoice 复刻音色 · ${cfg.voiceModel} · ${cfg.voiceMaxChars} 字以内才念 · 一天最多 ${cfg.voiceMaxDay} 条${cfg.voiceCutMs ? ` · 句尾再剪 ${cfg.voiceCutMs}ms` : ''}` : '没开：.env 里要有 VOICE_ID 和 DASHSCOPE_API_KEY', '它觉得这句适合说出来（笑、吐槽、撒娇、晚安，或者你让它发语音）就用自己的声音发 QQ 语音；合成后自动去掉开头结尾的杂音。太长、发够了、合成失败都改成打字。语音能带语气：生气、难过、委屈、害怕、惊讶、嫌弃、困，她可以写 [语音:害怕] 自己点；没点就跟着有来由的心情走（你惹她生气、委屈、烦你，或者熬夜后犯困），没来由的心情不算；带语气的音量压一压，不会突然很大声。开心的语气试过跟生气听不出区别，没做。/说话 xxx 直接念给你听（不带心情）。'],
+        ['唱歌', on(cfg.sing), (() => { let songs = []; try { songs = fs.readdirSync(SONG_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => readJson(path.join(SONG_DIR, d.name, 'song.json'), null)).filter((m) => m && (m.clips || []).length); } catch {} return songs.length ? `会唱 ${songs.map((m) => `${m.title}（${m.clips.length} 段）`).join('、')} · 一天最多主动唱 ${cfg.singMaxDay} 段` : `还没有歌：用 ${path.join(HERE, 'sing', 'render.py')} 转一首`; })(), '用她自己的嗓子唱：提前把歌转好放进歌库（Seed-VC 唱歌模型用她的声音微调过，参考用她唱歌的片段），聊天时它想唱、或者你让它唱，就挑一段发 QQ 语音，不连着唱同一段。没学过的歌说还没学会；唱够了说嗓子累了。/唱歌 歌名 直接听，/歌单 看会哪些。'],
+      ]],
+    ],
+    commands: [
+      ['/唱歌 第一天', '用她的嗓子唱一段（不写歌名就随便唱一首，不算每天的条数）', 50],
+      ['/歌单', '它会唱哪些歌、每首几段', 60],
+      ['/说话 你好呀', '用它的声音把这句念成语音发给你（试音色用，不算每天的条数）', 70],
+      ['/学说话 /别学了', '看她在学谁说话、学到几成；别学了就停掉并删掉素材', 150],
+    ],
+  };
 }
