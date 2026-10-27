@@ -1630,10 +1630,28 @@ on('say:after', async (target, text, tags, opts) => {
 on('say:after', async (target, text, tags, opts) => {
   const moods = tags.moods || [];
   const mood = moods[0] || (opts.autoMood ? autoMood(text) : '');
-  if (!mood || !(moods.length || Math.random() < (opts.autoMood || 0))) return;
-  if (text) await sleep((400 + Math.random() * 500) * pace());
-  await sendSticker(target, mood);
+  let sent = false;
+  if (mood && (moods.length || Math.random() < (opts.autoMood || 0))) {
+    if (text) await sleep((400 + Math.random() * 500) * pace());
+    sent = await sendSticker(target, mood);
+  }
+  if (opts.casual) noteSticker(target, sent);
 }, 20);
+// 表情包发得太少时提醒一句：人设里写的是“十句里最多一次”，可模型一换新会话（会话坏了重开）就容易一张都不发，
+// 越不发、聊天记录里越没有发的样子，就越不发。每个聊天记着最近 12 句闲聊回复发没发表情包，
+// 攒够 8 句、一张都没有，这一轮提示词末尾提醒一句；发了就不再提醒，不会变成句句都发。
+const stickerSeen = new Map(); // chatKey -> 最近几句闲聊回复有没有带表情包（true/false）
+const chatKeyOf = (t) => (t.message_type === 'group' ? `g${t.group_id}:u${t.user_id}` : `u${t.user_id}`);
+function noteSticker(target, sent) {
+  const list = stickerSeen.get(chatKeyOf(target)) || [];
+  list.push(!!sent);
+  stickerSeen.set(chatKeyOf(target), list.slice(-12));
+}
+on('prompt:hint', (t) => {
+  const list = stickerSeen.get(t.chatKey) || [];
+  if (list.length < 8 || list.some(Boolean)) return '';
+  return '\n（你最近好多句都没发表情包了。这句要是有情绪——好笑、无语、得意、委屈、震惊——可以在最后加个 [表情:想表达的意思]，会配一张图发出去；没情绪就算了，别硬发。）';
+}, 15);
 
 const voiceDay = { day: '', count: 0 };
 // 还没搬走的：合成语音先就地当 voice 服务给出去（电脑喇叭要用），搬“说话的样子”（speech）时连 tts.mjs 一起挪过去

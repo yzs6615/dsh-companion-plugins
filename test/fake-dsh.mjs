@@ -117,6 +117,7 @@ if (!prompt.includes('整理自己对一个朋友的长期记忆') && !prompt.in
   // TYPO 那句要原样回：后面拼了“[只知道开心]”这种标记（她的默认心情随时段变），手滑测试就对不上了
   if (prompt.includes('对方说话的习惯')) reply += ' [有口头禅]';
   if (prompt.includes('最近的你（')) reply += ' [有自我]';
+  if (prompt.includes('你最近好多句都没发表情包了')) reply += ' [该发表情]';
   if (prompt.includes('被 TA 的说话方式带跑偏了')) reply += ' [在学说话]';
   if (prompt.includes('已经被带得挺明显了') && prompt.includes('绝了捏')) reply += ' [学到位]';
   if (prompt.includes('主动找过对方')) reply += ' [有小情绪]';
