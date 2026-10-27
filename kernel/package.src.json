@@ -1,0 +1,17 @@
+{
+  "name": "dsh-agent-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "QQ (OneBot 11 / NapCat) <-> DeepSeek Harness bridge, plus an ADB phone-control CLI",
+  "scripts": {
+    "start": "node bridge.mjs",
+    "test": "node test/e2e.mjs",
+    "phone": "node phone/phone.mjs",
+    "napcat:config": "node napcat/setup-onebot.mjs"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.22.0"
+  }
+}
