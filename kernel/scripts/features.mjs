@@ -6,6 +6,7 @@
  *   node scripts/features.mjs            # 生成 data/features.html 并用浏览器打开
  *   node scripts/features.mjs --no-open  # 只生成（再自己用 explorer 打开，免得浏览器跟着变成管理员权限）
  *   node scripts/features.mjs --out <文件>
+ *   node scripts/features.mjs --text     # 只在终端打印功能开关和设置（不生成网页、不带每个人的记忆；机器人自己查开了啥用这个，代替去读 .env）
  *
  * 在哪个目录跑都行。本体的行写在这里；别的插件的行由插件自己给：module.mjs 导出的 settings(env, parseList)（设置的默认值）
  * 和 features(cfg, ctx)（它那几行），见 docs/插件接口.md。这里只 import 插件、不跑它的 setup：不连 QQ、不开定时任务、不写数据。
@@ -120,9 +121,10 @@ function coreFeatures() {
         ['打字节奏', on(cfg.typingMsPerChar > 0), `${cfg.typingMsPerChar}ms/字，封顶 6s · 正在输入：${cfg.inputStatus ? '开' : '关'} · 标已读：${cfg.markRead ? '开' : '关'}`, '回复拆成几个气泡，按字数“打字”；模型想的时间算进第一个气泡。'],
         ['睡觉时段慢回', on(cfg.sleepDelayProb > 0), `${cfg.sleepStart}–${cfg.sleepEnd} 点，${pct(cfg.sleepDelayProb)} 概率晚 1–5 分钟回（只限私聊）`, '像人睡着了一样，不是每条都秒回；不会“已读不回”。'],
         ['聊天记忆', on(cfg.memoryEnabled), '每个聊天存最近 30 行，带最近 12 行进提示词', '短期的“刚才聊到哪了”。'],
-        ['超时', 'on', `单轮最多 ${Math.round(cfg.timeoutMs / 1000)}s`, '超时会用人话说卡住了，真实原因只写日志。'],
+        ['超时', 'on', `单轮最多 ${Math.round(cfg.timeoutMs / 1000)}s`, '超时会用人话说卡住了，真实原因只写日志；会话留着、不整轮重跑，它这一轮开出来的命令（整棵进程树）一起结束。只有会话真没了 / 坏了才丢掉重开。'],
         ['看懂引用', 'on', '引用消息时会把原文（和里面的图）一起给它看', 'QQ 里引用/回复某条消息，它能看到你引用的是谁说的哪句话；引用的是它自己说过的话它也知道。群里没 @ 它、但引用了它的话，也算在跟它说话。'],
         ['看懂视频和文件', on(cfg.media), `${cfg.mediaMaxMB}MB 以内`, '发视频：挑几帧画面拼图给她看，10 分钟以内的再听一下说了啥。发文件：文本、PDF、Word、Excel、PPT 直接读成字，图片当图片看，别的告诉她存在哪。'],
+        ['听语音', !cfg.hearVoice ? 'off' : env.ASR_SCRIPT || (env.WHISPER_MODEL_DIR && fs.existsSync(path.join(path.resolve(env.WHISPER_MODEL_DIR), 'base', 'model.bin'))) ? 'on' : 'idle', cfg.hearVoice ? (env.WHISPER_MODEL_DIR ? `本地 Whisper：${env.WHISPER_MODEL_DIR}` : '没设 WHISPER_MODEL_DIR，听不了') : '', '对方发来的 QQ 语音，用本地 Whisper（base）转成字再回；只用本地模型，没有就不听（不去网上下）。没听清就让对方打字。群里也听，只是得先叫到她。HEAR_VOICE=false 关。'],
         ['发现撤回', on(cfg.recall), `熟人撤回后 ${Math.round(cfg.recallTeaseProb * 100)}% 会调侃一句`, '你撤回一条消息：还没回的就不回了；私聊里熟一点的人，她偶尔会说“撤回了啥 我都看到了”。群里不调侃。'],
         ['手滑', on(cfg.typoProb > 0), `${pct(cfg.typoProb)} 概率，10 分钟最多一次`, '把一个字打成同音字，过一两秒补一句“*对的字”或撤回重发。'],
         ['附和点表情', on(cfg.react), `${pct(cfg.reactProb)} 概率`, '对方只回“嗯嗯/好的/哈哈”且上一句不是问句时，点个 QQ 表情回应，不调模型。'],
@@ -135,7 +137,7 @@ function coreFeatures() {
       ]],
       ['手机和权限', [
         ['守护', 'on', '装在 DSH 里时由本体（dsh-companion-core）看着内核', '内核意外停了（崩溃、被结束进程）本体过 10 秒把它拉起来；退出码 3（同一份数据已经有一个内核在跑，比如另开了一个 DSH）就隔一分钟再看。崩溃的原因记在 bridge.log。在仓库里直接 node bridge.mjs 跑的没人守。', 10],
-        ['权限模式', cfg.permissionMode === 'danger-full-access' ? 'warn' : 'on', cfg.permissionMode || '（默认）', cfg.permissionMode === 'danger-full-access' ? '白名单里的人能让它执行任意命令、读写任意文件。只加信得过的人。' : '', 30],
+        ['权限模式', cfg.permissionMode === 'danger-full-access' ? 'warn' : 'on', `主人私聊：${cfg.permissionMode || '（默认）'} · 别人私聊、群里：read-only · 主人：${cfg.pcOwner || cfg.proactiveQQ[0] || '（没设，谁都按别人算）'}`, `只有主人（PC_OWNER，没填就是 PROACTIVE_QQ 第一个）私聊时用 DSH_PERMISSION_MODE，能让她动手机、电脑、文件；别人私聊、群里（主人在群里也一样）都只读、只陪聊，主动消息和提炼长期事实也只读。${cfg.permissionMode === 'danger-full-access' ? '主人私聊时能让它执行任意命令、读写任意文件。' : ''}`, 30],
         ['私聊白名单', 'on', cfg.allowedQQ.join(', ') || '（空）', '', 40],
       ]],
     ],
@@ -143,13 +145,19 @@ function coreFeatures() {
       ['/status', '在线状态、活跃任务数、熟悉度和综合分（给你排错用）', 10],
       ['/心情', '它回一句人话说心情，不报数字', 20],
       ['/new', '开新对话（清掉这个聊天的模型会话，长期事实和熟悉度不受影响）', 30],
-      ['/提醒 30m 喝水', '到点私聊提醒；单发 /提醒 看列表', 40],
+      ['/提醒 30m 喝水', '到点私聊提醒；单发 /提醒 看列表（直接说“半小时后提醒我喝水”也行）', 40],
       ['/喂鱼 /摸摸', '亲密度 +1', 100],
+      ['/help', '看能直接跟她说哪些事', 200],
+    ],
+    natural: [
+      ['“半小时后提醒我喝水”', '到点私聊“该喝水了”；“明早 8 点叫我起床”这种钟点也行，没说多久她会先问；问“我有哪些提醒”她知道。只能设一次的，每天重复的还不支持', 10],
+      ['直接发语音', cfg.hearVoice ? '用本地 Whisper 听懂了再回（要有本地模型）' : '没开（HEAR_VOICE=false）', 50],
+      ['“截图给我看看”', '主人私聊时，她把自己截的图（手机截图、看直播的截图、现场照、画的画…）直接发过来；只发数据目录里她自己弄出来的图', 75],
     ],
     tools: [
       ['启动', '装在 DSH 里：启动 DSH（比如 <code>dsh web</code>）时本体把内核一起带起来，插件装上、卸掉后重启 DSH 生效；在仓库里开发：<code>node bridge.mjs</code>', 10],
       ['日志', `<code>${esc(path.join(DATA_DIR, 'bridge.log'))}</code>：连没连上 QQ、装了哪些插件、报错、掉线`, 20],
-      ['功能与机制', `<code>node "${script('features.mjs')}"</code>：重新生成这页并打开（<code>--no-open</code> 只生成）`, 25],
+      ['功能与机制', `<code>node "${script('features.mjs')}"</code>：重新生成这页并打开（<code>--no-open</code> 只生成，<code>--text</code> 只在终端打印开关和设置）`, 25],
       ['日记网页', `<code>node "${script('journal-view.mjs')}"</code>：选日期看那天的日记、跟谁聊了啥、当天的聊天（含聊天内容，只在本机看）`, 40],
       ['会话查看', `<code>node "${script('session-view.mjs')}"</code>：每轮的上下文和思考过程（含对话内容，别外发）`, 50],
       ['配置', `<code>${esc(path.join(HOME, '.env'))}</code>（COMPANION_HOME 里的 .env；改完要重启 DSH，人设除外）`, 60],
@@ -176,6 +184,7 @@ for (const part of parts) for (const [group, rows] of part.groups || []) grouped
 const rank = (g) => (GROUPS.includes(g) ? GROUPS.indexOf(g) : GROUPS.length); // 不在上面这张表里的组排在最后，按插件加载的先后
 const features = [...grouped].sort(([a], [b]) => rank(a) - rank(b)).map(([group, rows]) => [group, byOrder(rows, 4)]);
 const commands = byOrder(parts.flatMap((part) => part.commands || []), 2);
+const natural = byOrder(parts.flatMap((part) => part.natural || []), 2); // “直接跟她说”的例子
 const tools = byOrder(parts.flatMap((part) => part.tools || []), 2);
 const sections = parts.flatMap((part) => part.sections || []); // [[标题, HTML]]，放在“它此刻”后面
 const personExtras = parts.map((part) => part.person).filter((fn) => typeof fn === 'function'); // (qq, st) → 这个人的卡片里补的 HTML
@@ -199,6 +208,22 @@ const diary = (state._self?.log || []).filter((e) => e.day === dayKey());
 
 // ── render ────────────────────────────────────────────────────────────────
 const pill = { on: ['开', 'on'], off: ['关', 'off'], idle: ['开着·用不上', 'idle'], warn: ['注意', 'warn'], life: ['归 ChronoLife 管', 'idle'] };
+
+// --text：只在终端打印每个功能开没开、现在的设置（给机器人自己查“开了哪些功能”用，代替去读 .env）。
+// 不生成网页，也不带每个人的熟悉度和记得的事。
+if (argv.includes('--text')) {
+  const lines = [`装了的插件：${plugins.map((p) => p.id).join('、') || '没装（只有本体）'}${broken.length ? `（没加载上：${broken.join('；')}）` : ''}`];
+  for (const [group, rows] of features) {
+    lines.push(`【${group}】`);
+    for (let [name, level, setting] of rows) {
+      const t = level === 'on' && taken[name];
+      if (t && t[1]) level = 'life';
+      lines.push(`- ${name}：${pill[level]?.[0] || level}${setting ? ` · ${String(setting).replace(/\s+/g, ' ')}` : ''}`);
+    }
+  }
+  console.log(lines.join('\n'));
+  process.exit(0);
+}
 const featureHtml = features
   .map(
     ([group, rows]) => `<h2>${esc(group)}</h2><div class="card"><table>${rows
@@ -260,6 +285,11 @@ ${sections.map(([title, body]) => `\n<h2>${esc(title)}</h2>\n${body}\n`).join(''
 ${peopleHtml}
 
 ${featureHtml}
+
+<h2>直接跟她说</h2>
+<div class="card"><table>
+${natural.map(([say, desc]) => `<tr><td class="n">${esc(say)}</td><td>${esc(desc)}</td></tr>`).join('\n')}
+</table><div class="how">她在回复里写个标记（[提醒:30|喝水] 这种），本体抠掉后交给管这件事的插件，照原来的命令去办，谁能办跟命令一样；不会另外发“已设置”，办不成会补一句。没装的插件，它的事她不会答应。下面的命令也都还能用。</div></div>
 
 <h2>命令（在 QQ 里发）</h2>
 <div class="card"><table>
