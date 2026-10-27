@@ -4377,6 +4377,7 @@ async function checkChronoLife() {
  */
 const AGENTS_MARK = '<!-- 由 dsh-companion 生成，装卸插件后会重写；想自己写就删掉这一行 -->';
 function writeAgentsMd() {
+  if (!env.COMPANION_HOME) return; // 只在装进 DSH 跑时写（测试、开发时工作目录是仓库，别往里写）
   const body = collect('agents');
   const file = path.join(cfg.agentCwd, 'AGENTS.md');
   try {

@@ -20,23 +20,29 @@
 
 ## 安装
 
-先装好 DSH（0.2.1-rc.2 及以上）和 NapCat。然后二选一：
+先装好 DSH 和 NapCat（DSH 装插件要用 pnpm，按 DSH 的说明装好）。插件不挑 DSH 版本，也不依赖 DSH 内部的包，
+自己装的 DSH 直接就能装。三种装法任选：
 
-**用下载器（推荐）**：到 [Releases](https://github.com/yzs6615/dsh-companion-plugins/releases) 下载
-`下载器.zip`（只有下载器，装的时候在线下插件）或 `全部插件.zip`（下载器 + 全部安装包，离线装），解压后双击 `安装.cmd`，
-回车装全部，或者写编号挑着装。
-
-**一个个装**：每个插件在 Releases 里有自己的安装包，用 DSH 自己的命令装（先装本体）：
+**DSH 自己的命令（不用下载器）**：每个插件在 GitHub 上有自己的分支，先装本体，再装想要的：
 
 ```bash
-dsh plugin --profile web add https://github.com/yzs6615/dsh-companion-plugins/releases/download/v0.1.0/dsh-companion-core-0.1.0.tgz
+dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#core
 ```
 
 ```bash
-dsh plugin --profile web add https://github.com/yzs6615/dsh-companion-plugins/releases/download/v0.1.0/dsh-companion-speech-0.1.0.tgz
+dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#speech
 ```
 
-卸载：`dsh plugin --profile web remove dsh-companion-speech`。
+分支名：`core` `speech` `memory` `mood` `life` `proactive` `pc` `profile` `group` `phone`。
+用桌面版的话把 `web` 换成 `desktop`，并且先把桌面版完全退出。
+
+**下载器**：到 [Releases](https://github.com/yzs6615/dsh-companion-plugins/releases) 下载
+`下载器.zip`（装的时候从 GitHub 拉插件）或 `全部插件.zip`（带全部安装包，不联网也能装），解压后双击 `安装.cmd`
+（Linux / Mac：`node downloader.mjs`），回车装全部，或者写编号挑着装。
+
+**单个安装包**：Releases 里每个插件有自己的 `.tgz`，下载后 `dsh plugin --profile web add <文件路径>`。
+
+卸载：`dsh plugin --profile web remove dsh-companion-speech`。插件装上、卸掉后重启 DSH 生效。
 
 ## 设置
 

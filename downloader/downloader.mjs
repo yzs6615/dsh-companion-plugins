@@ -9,7 +9,7 @@
  *   node downloader.mjs --list          只列出有哪些插件
  *
  * 安装包从哪来：下载器旁边的 packages\ 文件夹里有 .tgz（下的是“全部插件”离线包）就用本地的；
- * 没有就从 GitHub Releases 下（由 DSH 自己的 pnpm 去下）。实际执行的是 `dsh plugin --profile <配置> add <安装包>`。
+ * 没有就从 GitHub 上这个插件的分支下（由 DSH 自己的 pnpm 去下）。实际执行的是 `dsh plugin --profile <配置> add <安装包>`。
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -101,10 +101,11 @@ async function main() {
   const localDir = path.join(HERE, 'packages')
   const source = (p) => {
     const file = path.join(localDir, `${p.pkg}-${VERSION}.tgz`)
-    return fs.existsSync(file) ? file : `https://github.com/${REPO}/releases/download/v${VERSION}/${p.pkg}-${VERSION}.tgz`
+    // 有离线包就用本地的；没有就让 DSH 的 pnpm 直接从 GitHub 拉这个插件的分支（每个插件一个分支，分支根目录就是插件）
+    return fs.existsSync(file) ? file : `github:${REPO}#${p.id}`
   }
   console.log(`\n要装进 DSH 的“${profile}”配置：${chosen.map((p) => p.title).join('、')}`)
-  console.log(fs.existsSync(localDir) ? '安装包：用下载器旁边 packages 文件夹里的' : `安装包：从 GitHub 下（github.com/${REPO}/releases）`)
+  console.log(fs.existsSync(localDir) ? '安装包：用下载器旁边 packages 文件夹里的' : `安装包：从 GitHub 下（github.com/${REPO} 的各个插件分支）`)
   if (!flag('--all') && !value('--only') && /^n/i.test(await ask('开始？（回车开始，n 取消）'))) return 0
 
   let failed = 0
