@@ -23,8 +23,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const ADB = process.env.ADB || path.join(ROOT, '..', 'tools', 'platform-tools', 'adb.exe');
-const SHOT_DIR = process.env.PHONE_SHOT_DIR || path.join(ROOT, 'data', 'shots');
+// adb：.env 的 ADB 优先，其次插件旁边的 tools/platform-tools，再不然用 PATH 里的 adb
+const LOCAL_ADB = path.join(ROOT, 'tools', 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb');
+const ADB = process.env.ADB || (fs.existsSync(LOCAL_ADB) ? LOCAL_ADB : 'adb');
+const DATA_DIR = process.env.BRIDGE_DATA ? path.resolve(process.env.BRIDGE_DATA) : path.join(ROOT, 'data');
+const SHOT_DIR = process.env.PHONE_SHOT_DIR || path.join(DATA_DIR, 'shots');
 const DRY = process.argv.includes('--dry-run');
 
 const KEYCODES = {
@@ -59,7 +62,7 @@ function adbArgs(args, { binary = false } = {}) {
     console.log(`${ADB} ${full.join(' ')}`);
     process.exit(0);
   }
-  if (!fs.existsSync(ADB) && !process.env.ADB) fail(`找不到 adb: ${ADB}（先运行 scripts 里的下载，或设置 ADB=）`);
+  if (ADB !== 'adb' && !fs.existsSync(ADB)) fail(`找不到 adb: ${ADB}（在 .env 里设 ADB=adb 的完整路径）`);
   try {
     return execFileSync(ADB, full, {
       encoding: binary ? 'buffer' : 'utf8',
@@ -271,7 +274,7 @@ function setIme(which = 'adb') {
   console.log('done');
 }
 function installIme() {
-  const apk = path.join(ROOT, '..', 'tools', 'ADBKeyboard.apk');
+  const apk = process.env.ADB_KEYBOARD_APK || path.join(ROOT, 'tools', 'ADBKeyboard.apk');
   if (!fs.existsSync(apk)) fail(`找不到 ${apk}`);
   adbArgs(['install', '-r', apk]);
   sh(['ime', 'set', 'com.android.adbkeyboard/.AdbIME']);
@@ -285,7 +288,7 @@ const positional = rest.filter((a) => !a.startsWith('--'));
 // 记一笔“刚刚有人在用手机”，bridge 的黑屏看门狗只在这之后才管锁屏（status/unlock 是看门狗自己调的，不算）
 if (cmd && !DRY && !['status', 'unlock', 'devices', 'help', 'wait'].includes(cmd)) {
   try {
-    const dataDir = process.env.BRIDGE_DATA ? path.resolve(process.env.BRIDGE_DATA) : path.join(ROOT, 'data');
+    const dataDir = DATA_DIR;
     fs.mkdirSync(dataDir, { recursive: true });
     fs.writeFileSync(path.join(dataDir, 'phone-used'), String(Date.now()));
   } catch {

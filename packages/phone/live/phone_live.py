@@ -25,7 +25,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-TOOLS = ROOT.parent / "tools"
+TOOLS = ROOT / "tools"
 PYLIBS = TOOLS / "pylibs"
 if PYLIBS.exists():
     sys.path.insert(0, str(PYLIBS))
@@ -36,8 +36,9 @@ try:
 except Exception:
     pass
 
-ADB = TOOLS / "platform-tools" / "adb.exe"
-LIVE_DIR = ROOT / "data" / "live"
+ADB = Path(os.environ["ADB"]) if os.environ.get("ADB") else (TOOLS / "platform-tools" / "adb.exe" if (TOOLS / "platform-tools" / "adb.exe").exists() else Path("adb"))
+DATA_DIR = Path(os.environ["BRIDGE_DATA"]) if os.environ.get("BRIDGE_DATA") else ROOT / "data"
+LIVE_DIR = DATA_DIR / "live"
 
 
 def now_tag() -> str:
@@ -111,7 +112,7 @@ def transcribe(wav_path: Path, model_size: str = "base") -> dict:
 
     print(f"[phone] loading whisper {model_size} (cpu/int8)...", flush=True)
     # 只用本地模型（WHISPER_MODEL_DIR 或 tools/whisper-models 下的 <大小>/model.bin），找不到就报错，绝不自己去网上下
-    base = Path(os.environ["WHISPER_MODEL_DIR"]) if os.environ.get("WHISPER_MODEL_DIR") else TOOLS / "whisper-models"
+    base = Path(os.environ.get("WHISPER_MODEL_DIR") or (TOOLS / "whisper-models"))
     local = base / model_size
     if not (local / "model.bin").exists():
         raise RuntimeError(f"没有本地 whisper 模型：{local}（用 scripts/fetch-whisper.mjs 下，或设 WHISPER_MODEL_DIR）")

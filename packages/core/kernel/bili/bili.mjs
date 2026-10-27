@@ -168,7 +168,7 @@ async function listen(bvid, cid, minutes) {
   const file = path.join(DATA, `listen-${bvid}.m4a`);
   fs.writeFileSync(file, buf);
   try {
-    const py = spawnSync(env.PYTHON || 'python', [path.join(ROOT, 'live', 'phone_live.py'), 'asr', file, '--model', 'base'], {
+    const py = spawnSync(env.PYTHON || 'python', [path.join(ROOT, 'media', 'asr.py'), file, '--model', 'base'], {
       encoding: 'utf8',
       timeout: 10 * 60_000,
       windowsHide: true,
