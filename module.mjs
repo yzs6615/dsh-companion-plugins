@@ -350,7 +350,7 @@ export default function setup(api) {
 
   // ── 记得你的作息 ──────────────────────────────────────────────────────────
   // bridge.log 里对方每条消息的时间 → 平时几点冒头、几点没动静（至少 4 天）；今天晚睡 / 早起了，聊天时她心里知道，一天只提一次。
-  // 作息被带偏（心情和作息那组，还在本体）用的是同一份数据：算完把按 QQ 分好的消息时间交给 rhythm:times 钩子，在它之后才 saveState（跟原来一样）
+  // 作息被带偏（心情和作息，mood 插件）用的是同一份数据：算完把按 QQ 分好的消息时间交给 rhythm:times 钩子，在它之后才 saveState（跟原来一样）
   async function refreshRhythms() {
     if (!cfg.rhythm) return;
     const per = new Map();
