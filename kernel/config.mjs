@@ -52,6 +52,7 @@ export const cfg = {
   humanSplit: (env.HUMAN_SPLIT || 'true') !== 'false',
   botName: env.BOT_NAME || '小伴', // 启动器 / 状态窗口 / 功能页上显示的名字
   wakeWords: parseList(env.WAKE_WORDS || env.BOT_NAME || '小伴'), // 机器人的名字：群里叫这些词能把它叫出来，私聊点电台时也会去掉
+  quietHours: (env.QUIET_HOURS || '23-9').split('-').map(Number), // 这几个钟头不出声、不留条、不发空间（各插件主动做事前看 api.quiet()）
   memoryEnabled: (env.MEMORY || 'true') !== 'false',
   proactive: (env.PROACTIVE || 'false') === 'true',
   proactiveQQ: parseList(env.PROACTIVE_QQ || ''),
@@ -137,23 +138,7 @@ export const cfg = {
   recallTeaseProb: Number(env.RECALL_TEASE_PROB ?? 0.5),
   sleepDrift: (env.SLEEP_DRIFT || 'false') === 'true', // 作息被带偏：电脑的主人最近老熬夜 / 早睡，她的睡觉时段跟着挪
   sleepDriftMax: Number(env.SLEEP_DRIFT_MAX ?? 2), // 最多被带晚几个小时（带早最多 1 小时）
-  // 电脑室友：看得见这台电脑在放什么歌、开着什么游戏、开了多久、人在不在电脑前；只跟电脑的主人提
-  pcBuddy: (env.PC_BUDDY || 'false') === 'true',
-  pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）
-  pcMaxDay: Number(env.PC_MAX_DAY ?? 3), // 一天最多因为电脑上的事主动说几句
-  pcSongProb: Number(env.PC_SONG_PROB ?? 0.12), // 新放一首歌时顺口说一句的概率（同一首这周放到第 3 遍必说）
-  pcCheckMs: Number(env.PC_CHECK_MS ?? 120_000),
-  // 电脑上的她（都靠电脑室友看键盘鼠标多久没动；夜里不出声、不留条）
-  quietHours: (env.QUIET_HOURS || '23-9').split('-').map(Number), // 这几个钟头不出声、不留条、不发空间
-  awayMin: Number(env.AWAY_MIN ?? 120), // 键盘鼠标这么久没动、又动了，算“回来了”
-  speaker: (env.SPEAKER || 'false') === 'true', // 早上第一次开电脑、离开很久又回来时，用她的声音从电脑喇叭说一句（要开语音）
-  speakerMaxDay: Number(env.SPEAKER_MAX_DAY ?? 3),
-  notes: (env.NOTES || 'false') === 'true', // 离开电脑好几个小时时，她在桌面留张便条，回来时弹个通知
-  noteAfterMin: Number(env.NOTE_AFTER_MIN ?? 180),
-  drawer: (env.DRAWER || 'false') === 'true', // 桌面上“<名字>的抽屉”：写给主人的信、明信片、现场照、梦、便条、收藏的视频都放一份
-  playMusic: (env.PLAY_MUSIC || 'false') === 'true', // 用电脑上的 QQ 音乐放歌：模型写 [放歌:歌名 歌手]，主人在电脑前就直接放，不在就发链接
-  playMusicMaxDay: Number(env.PLAY_MUSIC_MAX_DAY ?? 6),
-  qqMusicExe: env.QQMUSIC_EXE || 'C:\\Program Files (x86)\\Tencent\\QQMusic\\QQMusic.exe',
+  pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）。主人是谁本体也要用（写信、明信片、作息被带偏…），电脑上的她那些设置在 pc 插件里
   // 做梦：早上醒来有时记得昨晚的梦（最近的事拼的），今天第一次聊天、或者早安时顺口说
   dream: (env.DREAM || 'false') === 'true',
   dreamProb: Number(env.DREAM_PROB ?? 0.5), // 每天每个人做梦的概率
