@@ -40,7 +40,7 @@ export default function setup(api) {
   // BRIDGE_DATA / STICKER_DIR 让测试能用临时目录，不碰真实数据。
   const STICKER_DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(DATA_DIR, 'stickers');
   const SONG_DIR = env.SONG_DIR ? path.resolve(env.SONG_DIR) : path.join(DATA_DIR, 'songs');
-  // 长期事实（记得你，memory）还在本体，本体就地给了 facts 服务；没有就当什么都不记得
+  // 长期事实（记得你，memory 插件）：没装就当什么都不记得
   const readFacts = (chatKey) => api.use('facts')?.readFacts(chatKey) || { facts: [], followups: [], style: [] };
 
   // ── 学某个人的说话风格（合并转发给它就能学）────────────────────────────────
