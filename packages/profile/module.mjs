@@ -176,10 +176,12 @@ export default function setup(api) {
   }
   function recentNames() {
     const names = new Set();
+    const raw = api.use('journal')?.RAW; // 日记流水（记得你，memory 插件）：没装就没有流水，也就没有要避开的名字
+    if (!raw) return [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(Date.now() - i * 86400_000);
       try {
-        for (const l of fs.readFileSync(path.join(api.JOURNAL_RAW, `${dayKey(d)}.jsonl`), 'utf8').split('\n').filter(Boolean)) {
+        for (const l of fs.readFileSync(path.join(raw, `${dayKey(d)}.jsonl`), 'utf8').split('\n').filter(Boolean)) {
           const who = String(JSON.parse(l).who || '').replace(/\(\d+\)$/, '').trim();
           if (who.length >= 2) names.add(who);
         }
