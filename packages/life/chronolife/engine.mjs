@@ -17,7 +17,8 @@ const TABLE_COLUMNS = {
   virtual_world_state: 'id:INTEGER,data:TEXT',
   outbound_messages: 'id:TEXT,scope:TEXT,content:TEXT,reason_id:TEXT,status:TEXT,created:INTEGER,updated:INTEGER',
 };
-const DEFAULTS = { timezone: 'Asia/Bangkok', tickMinutes: 30, dailyMax: 4, weeklyMax: 3, cooldownHours: 24, quietStart: 23, quietEnd: 9, enabled: true, rest: false, proactive: false };
+// 时区不填就用电脑的时区（取不到才用 Asia/Shanghai）；已经建好的数据库里存着当时的时区，不会跟着变
+const DEFAULTS = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai', tickMinutes: 30, dailyMax: 4, weeklyMax: 3, cooldownHours: 24, quietStart: 23, quietEnd: 9, enabled: true, rest: false, proactive: false };
 const ACTIVITIES = {
   plant: ['照顾虚拟植物', '给虚拟窗台的小植物浇了水，转了一下花盆。'],
   notes: ['整理虚拟生活笔记', '整理了虚拟窗边的笔记：把散乱的想法放在同一页。'],

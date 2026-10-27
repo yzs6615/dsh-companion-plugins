@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { ChronoLife } from './engine.mjs';
+// 下面的时间都是按 Asia/Bangkok 写的（START 是那边的中午）；时区默认跟着电脑走，测试里固定成这个，换台电脑也一样
+process.env.TZ = 'Asia/Bangkok';
+const { ChronoLife } = await import('./engine.mjs');
 
 const HOUR = 3600000, DAY = 24 * HOUR;
 const START = Date.parse('2026-10-27T05:00:00Z'); // Noon Asia/Bangkok.

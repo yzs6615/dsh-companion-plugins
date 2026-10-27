@@ -32,7 +32,7 @@ python live\live.py rec 30
 ## 模型
 
 只用本地的 faster-whisper 模型，绝不自己去网上下。自己下好 CTranslate2 格式的模型（比如 `base` 约 138MB），
-放成 `<目录>/base/model.bin` 这样，再在 `.env` 里写 `WHISPER_MODEL_DIR=<目录>`；没设时找插件目录下的 `tools/whisper-models/`。
+放成 `<目录>/base/model.bin` 这样，再在 `.env` 里写 `WHISPER_MODEL_DIR=<目录>`；没设时先找 `<COMPANION_HOME>/tools/whisper-models/`（本体的 `kernel/scripts/fetch-whisper.mjs` 没设 WHISPER_MODEL_DIR 时下到这），再找插件目录下的 `tools/whisper-models/`。
 换别的大小（`small` 更准、更慢）就多放一个 `<目录>/small/`，命令里加 `--model small`。
 
 ## 注意

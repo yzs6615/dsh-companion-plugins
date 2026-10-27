@@ -91,7 +91,7 @@ ChronoLife 只记“浇了水”“整理了笔记”这种骨架。每次维护
 
 ## 五、设置和存储
 
-`.env`：`CHRONOLIFE`、`CHRONOLIFE_PROACTIVE`、`CHRONOLIFE_TIMEZONE`（默认 Asia/Bangkok）、`CHRONOLIFE_TICK_MINUTES`（默认 30）。
+`.env`：`CHRONOLIFE`、`CHRONOLIFE_PROACTIVE`、`CHRONOLIFE_TIMEZONE`（不填就用电脑的时区，取不到才用 Asia/Shanghai）、`CHRONOLIFE_TICK_MINUTES`（默认 30）。
 后三个只在第一次建库时当初始值；之后用 `/生活` 改的设置存在数据库里，重启不会被 `.env` 覆盖，改了马上生效。
 
 数据在数据目录（`BRIDGE_DATA`，没设就是 COMPANION_HOME 下的 `data`）的 `chronolife/life.sqlite`（加 WAL 文件）；

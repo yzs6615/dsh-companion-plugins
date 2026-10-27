@@ -5,6 +5,8 @@ const si = args.indexOf('--session-id');
 const sid = si >= 0 ? args[si + 1] : null;
 const prompt = args[args.length - 1] || '';
 const sessionId = sid || `session-fake-${Date.now()}`;
+// FAKE_PROMPT_LOG：每一轮的提示词都记一行（测人设怎么进的提示词）
+if (process.env.FAKE_PROMPT_LOG) (await import('node:fs')).appendFileSync(process.env.FAKE_PROMPT_LOG, JSON.stringify(prompt) + '\n');
 // buildPrompt() prepends persona + memory; echo only the actual user line.
 const m = prompt.match(/对方刚说：\s*\n([\s\S]*?)(?:\n\n（|$)/);
 const userText = (m ? m[1] : prompt).trim();

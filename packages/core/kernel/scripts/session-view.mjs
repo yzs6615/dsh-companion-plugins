@@ -14,10 +14,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { readZstd } from './zstd-frames.mjs';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// 数据目录、DSH_HOME 跟内核一样（BRIDGE_DATA，没有就是 <COMPANION_HOME>/data；装进 DSH 后单独跑也找得到），见 home.mjs；它要排在 config.mjs 前面
+import { dataDir } from './home.mjs';
+import { cfg, env } from '../config.mjs';
 
 // ── args / env ────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -28,17 +28,9 @@ const opt = (name, fallback) => {
 };
 const target = argv.find((a, i) => !a.startsWith('--') && !['--last', '--out'].includes(argv[i - 1]));
 
-function envFile(key) {
-  if (process.env[key]) return process.env[key];
-  try {
-    const m = fs.readFileSync(path.join(ROOT, '.env'), 'utf8').match(new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, 'm'));
-    return m ? m[1].replace(/^["']|["']$/g, '') : '';
-  } catch {
-    return '';
-  }
-}
-const DSH_HOME = envFile('DSH_HOME') || path.resolve(ROOT, '..', '.dsh-qq');
-const DATA_DIR = envFile('BRIDGE_DATA') ? path.resolve(envFile('BRIDGE_DATA')) : path.join(ROOT, 'data');
+// 内核调模型时用的 DSH_HOME（会话存档在它下面的 sessions/）
+const DSH_HOME = cfg.dshHome;
+const DATA_DIR = dataDir(env);
 const SESSIONS_DIR = path.join(DSH_HOME, 'sessions');
 
 // ── locating a session ────────────────────────────────────────────────────

@@ -112,7 +112,7 @@ dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#life
 | --- | --- | --- |
 | `CHRONOLIFE` | 关 | 她自己的小屋 |
 | `CHRONOLIFE_PROACTIVE` | 关 | 小屋里的事、刷到的东西主动跟你说 |
-| `CHRONOLIFE_TIMEZONE` | `Asia/Bangkok` | 小屋按哪个时区过日子（夜里不打扰按它算） |
+| `CHRONOLIFE_TIMEZONE` | 电脑的时区 | 小屋按哪个时区过日子（夜里不打扰按它算），比如 `Asia/Shanghai`；不填就用电脑的时区（取不到才用 `Asia/Shanghai`）。小屋第一次建好时记进它的数据库，之后再改这里不会变 |
 | `CHRONOLIFE_TICK_MINUTES` | `30` | 多少分钟过一段日子 |
 
 后三个只在第一次建库时当初始值，之后用 `/生活` 改的存在数据库里。

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Write a NapCat OneBot 11 config with a forward WebSocket server that the
- * bridge can connect to, and sync the token into <COMPANION_HOME>/.env（没设 COMPANION_HOME 就是内核目录的 .env，跟 config.mjs 一样）.
+ * bridge can connect to, and sync the token into <COMPANION_HOME>/.env（找 COMPANION_HOME 跟本体别的小工具一样，见 scripts/home.mjs：没设时装进 DSH 的用 <DSH_HOME 或 ~/.dsh>/companion，在仓库里跑就是内核目录）.
  *
  *   node napcat/setup-onebot.mjs            # writes onebot11.json (template for every account)
  *   node napcat/setup-onebot.mjs 123456789  # also writes onebot11_123456789.json
@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { companionHome } from '../scripts/home.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const CONFIG_DIR =
@@ -62,7 +63,7 @@ for (const file of targets) {
 }
 
 // Sync token into the bridge's .env (leave everything else untouched).
-const envFile = path.join(process.env.COMPANION_HOME ? path.resolve(process.env.COMPANION_HOME) : ROOT, '.env');
+const envFile = path.join(companionHome(), '.env');
 if (fs.existsSync(envFile)) {
   const next = fs
     .readFileSync(envFile, 'utf8')

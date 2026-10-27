@@ -26,11 +26,14 @@ walk(path.join(ROOT, 'packages'));
 const files = fs.readdirSync(path.join(ROOT, 'test')).filter((f) => /\.mjs$/.test(f) && !['fake-dsh.mjs', 'radio.mjs'].includes(f));
 
 let bad = 0;
+const counts = []; // [名字, 通过几条]：最后列一张表
 for (const f of unit.filter(wanted)) {
   const r = spawnSync(process.execPath, ['--no-warnings', '--test', f], { cwd: ROOT, encoding: 'utf8', timeout: 300_000 });
   const ok = r.status === 0;
   if (!ok) bad++;
-  const pass = (r.stdout || '').match(/# pass (\d+)/)?.[1];
+  // 老的 Node 打印 “# pass N”，Node 24 打印 “ℹ pass N”，两种都认
+  const pass = (r.stdout || '').match(/^(?:#|ℹ)\s*pass (\d+)/m)?.[1];
+  counts.push([path.basename(f, '.test.mjs'), pass ? Number(pass) : 0, ok]);
   console.log(`${ok ? '通过' : '没过'}  ${path.relative(ROOT, f)}  ${pass ? `${pass} 条` : ''}`);
   if (!ok) console.log(lines(r).filter((l) => /not ok|Error/.test(l)).slice(0, 10).map((l) => `    ${l}`).join('\n'));
 }
@@ -40,8 +43,12 @@ for (const f of files.filter(wanted)) {
   const out = lines(r);
   const ok = r.status === 0;
   if (!ok) bad++;
+  // 端到端测试每条检查打印一行 “PASS  …”，数这些行
+  counts.push([f.replace(/\.mjs$/, ''), out.filter((l) => l.startsWith('PASS ')).length, ok]);
   console.log(`${ok ? '通过' : '没过'}  ${f}  ${Math.round((Date.now() - t0) / 1000)}s  ${out.at(-1) || ''}`);
   if (!ok) console.log(out.filter((l) => /✗|FAIL|失败|Error|not ok|没过/i.test(l)).slice(0, 15).map((l) => `    ${l}`).join('\n'));
 }
+console.log('\n每个测试通过几条：');
+for (const [name, n, ok] of counts) console.log(`  ${ok ? 'PASS' : '没过'}  ${name.padEnd(20)} ${n}`);
 console.log(bad ? `${bad} 个没过` : '全部通过');
 process.exit(bad ? 1 : 0);
