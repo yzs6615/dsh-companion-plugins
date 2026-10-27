@@ -78,8 +78,6 @@ export const cfg = {
   sleepEnd: Number(env.SLEEP_END ?? 7),
   sleepDelayProb: Number(env.SLEEP_DELAY_PROB ?? 0.5), // 睡觉时段慢回的概率，0 关闭
   typoProb: Number(env.TYPO_PROB ?? 0.04),
-  facts: (env.FACTS || 'true') !== 'false',
-  factsEvery: Number(env.FACTS_EVERY ?? 6),
   react: (env.REACT || 'true') !== 'false', // “嗯嗯/哈哈”点表情回应，不调模型
   reactProb: Number(env.REACT_PROB ?? 0.7),
   ignoreLimit: Number(env.IGNORE_LIMIT ?? 2), // 主动找了几次都没回，就先不找了（等对方开口）
@@ -92,9 +90,6 @@ export const cfg = {
   radioVoiceSec: Number(env.RADIO_VOICE_SEC ?? 58), // 拼成的每条语音最长几秒
   radioCollectMs: Number(env.RADIO_COLLECT_MS ?? 6000), // 投稿连发几条：最后一条之后等这么久再开录
   emotion: (env.EMOTION || 'true') !== 'false', // 心情有来由、会延续（模型写 [心情:词|为啥]）
-  rhythm: (env.RHYTHM || 'true') !== 'false', // 记得对方几点睡几点起，晚睡早起会注意到
-  curious: (env.CURIOUS || 'true') !== 'false', // 对对方还不了解的地方，找机会问一句
-  curiousProb: Number(env.CURIOUS_PROB ?? 0.3), // 每轮聊天有多大概率提醒她（一天最多一次）
   autonomyHours: (env.AUTONOMY_HOURS || '10-23').split('-').map(Number), // 自己找事做的时段
   autonomyRollWindowMin: Number(env.AUTONOMY_ROLL_WINDOW_MIN ?? 45), // 每小时在前多少分钟里随机掷骰子
   autonomyCheckMs: Number(env.AUTONOMY_CHECK_MS ?? 300_000),
@@ -118,16 +113,8 @@ export const cfg = {
   postcardEveryWeeks: Number(env.POSTCARD_EVERY_WEEKS ?? 3),
   postcardModel: env.POSTCARD_IMAGE_MODEL || env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
   postcardCheckMs: Number(env.POSTCARD_CHECK_MS ?? 600_000),
-  anniversary: (env.ANNIVERSARY || 'true') !== 'false', // 认识 100 天、生日这种日子
-  meetDate: env.MEET_DATE || '', // 手动指定认识的日子：qq:2025-05-15，多个用逗号；不填就用第一次聊天那天
-  weather: (env.WEATHER || 'true') !== 'false', // 对方那边的天气（Open-Meteo，免费不要 key）
-  weatherCity: env.WEATHER_CITY || '', // 默认城市；每个人也可以在 QQ 里发 /城市 杭州
   media: (env.MEDIA || 'true') !== 'false', // 看懂发来的视频（抽帧 + 听）和文件
   mediaMaxMB: Number(env.MEDIA_MAX_MB ?? 60),
-  journal: (env.JOURNAL || 'true') !== 'false', // 每天写日记，当长期上下文
-  journalHour: Number(env.JOURNAL_HOUR ?? 23), // 几点后写当天的日记（没写成第二天补）
-  journalDays: Number(env.JOURNAL_DAYS ?? 7), // 聊天时带最近几天的日记
-  journalCheckMs: Number(env.JOURNAL_CHECK_MS ?? 600_000),
   reflectHour: Number(env.REFLECT_HOUR ?? 22), // 每天几点后回想一次
   reflectCheckMs: Number(env.REFLECT_CHECK_MS ?? 600_000),
   selfMax: Number(env.SELF_MAX ?? 30), // “最近的自己”最多几条
