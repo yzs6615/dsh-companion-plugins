@@ -1,0 +1,40 @@
+{
+  "name": "dsh-companion-mood",
+  "version": "0.1.0",
+  "description": "心情和作息：心情有来由、会延续；作息被你带偏；主动找你没回会有点小情绪。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "index.js",
+    "module.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzs6615/dsh-companion-plugins.git",
+    "directory": "packages/mood"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,4 @@
+# dsh-companion-mood（心情和作息）：装上就挂进 DSH。要先装 dsh-companion-core。
+- insert:
+    - id: companion-mood
+      name: 'dsh-companion-mood'
