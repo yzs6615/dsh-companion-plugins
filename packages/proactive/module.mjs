@@ -3,8 +3,8 @@
  * 等你回（问了没回偶尔追一句“人呢”）、每周一封信（信纸用百炼画，letter/card.py 排字）和 /信。
  * 设置：PROACTIVE / PROACTIVE_MAX / PROACTIVE_IDLE_HOURS / PROACTIVE_LLM / GREETINGS、FOLLOWUP / FOLLOWUP_HOURS / FOLLOWUP_CHECK_MS / FOLLOWUP_IDLE_SEC、
  * POKE_SELF / POKE_SELF_PROB / POKE_SELF_IDLE_MIN / POKE_SELF_CHECK_MS、CHASE / CHASE_PROB / CHASE_MIN / CHASE_MAX / CHASE_CHECK_MS、
- * LETTER / LETTER_WEEKDAY / LETTER_HOUR / LETTER_CHECK_MS / LETTER_FONT。
- * 找谁（PROACTIVE_QQ）、找了几次没回就先不找（IGNORE_LIMIT）、信纸用哪个模型（LETTER_IMAGE_MODEL，礼物也用）还在本体。
+ * LETTER / LETTER_WEEKDAY / LETTER_HOUR / LETTER_CHECK_MS / LETTER_FONT、LETTER_IMAGE_MODEL（信纸用哪个模型；收礼物（life 插件）也读它，各读一遍）。
+ * 找谁（PROACTIVE_QQ）、找了几次没回就先不找（IGNORE_LIMIT）还在本体。
  * 提供 proactive 服务：clearAsk(chatKey)（别处主动发了消息，就不用再追“人呢”了）。没装这个插件，这些都跳过。
  */
 import fs from 'node:fs';
@@ -42,6 +42,8 @@ export default function setup(api) {
     letterWeekday: Number(env.LETTER_WEEKDAY ?? 0), // 0 = 周日
     letterHour: Number(env.LETTER_HOUR ?? 21),
     letterCheckMs: Number(env.LETTER_CHECK_MS ?? 600_000),
+    // 百炼画图用哪个模型：信纸用它；收到的礼物（她自己的生活，life 插件）也读这个环境变量，两边各读一遍，一样的
+    letterModel: env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
   });
   // 长期事实（记得你，memory 插件）：没装就当什么都不记得
   const readFacts = (chatKey) => api.use('facts')?.readFacts(chatKey) || { facts: [], followups: [], style: [] };
@@ -60,8 +62,9 @@ export default function setup(api) {
     const b = (cfg.sleepEnd + 24) % 24;
     return a <= b ? h >= a && h < b : h >= a || h < b;
   }
-  // 下面这几样还在本体里（人设成长、做梦、现场照那几组还没搬），先从 api 上的过渡取值函数拿
-  const { selfBlock, takeDream } = api;
+  // 人设成长、做梦在她自己的生活（life 插件）里，没装就不带、没有梦
+  const selfBlock = () => api.use('life')?.selfBlock() || '';
+  const takeDream = (chatKey) => api.use('life')?.takeDream(chatKey) || '';
   const shortDay = (d) => d.slice(5);
 
   /** 让模型自己写主动消息：带记忆、带时间，能分享点东西。不再有固定模板兜底。 */
@@ -300,7 +303,7 @@ export default function setup(api) {
       for (const f of fs.readdirSync(LETTER_DIR).filter((x) => /^\d{4}-\d{2}-\d{2}-\d+\.jpg$/.test(x))) drawer.put('信', f.replace(/-\d+\.jpg$/, '.jpg'), path.join(LETTER_DIR, f));
     } catch {}
   });
-  // 明信片（还在本体）也用同一串字体，本体那边留着一份
+  // 明信片（她自己的生活，life 插件）也用同一串字体，那边自己带一份
   const LETTER_FONTS = [env.LETTER_FONT, 'C:\\Windows\\Fonts\\FZSTK.TTF', 'C:\\Windows\\Fonts\\STXINGKA.TTF', 'C:\\Windows\\Fonts\\simkai.ttf', 'C:\\Windows\\Fonts\\msyh.ttc'].filter(Boolean);
   const WEEKDAYS = '日一二三四五六';
   function weekKey(d = new Date()) {
@@ -346,7 +349,8 @@ export default function setup(api) {
       log(`信纸没画成，用素纸：${err.message}`);
     }
     const card = `${base}.jpg`;
-    const stamp = ['heart', 'happy', 'look'].map((n) => path.join(api.SCENE_DIR, 'pose', `${n}.png`)).find((f) => fs.existsSync(f)) || '';
+    const sceneDir = api.use('photo')?.dir; // 现场照的动作图当小章（她自己的生活，life 插件），没装就不盖
+    const stamp = sceneDir ? ['heart', 'happy', 'look'].map((n) => path.join(sceneDir, 'pose', `${n}.png`)).find((f) => fs.existsSync(f)) || '' : '';
     fs.writeFileSync(`${base}.json`, JSON.stringify({
       bg: paper, out: card, to: String(out?.to || '').trim().slice(0, 20) || '你：', body, sign: `—— ${cfg.botName}`,
       date: `${now.getMonth() + 1}月${now.getDate()}日 周${WEEKDAYS[now.getDay()]}`, stamp, fonts: LETTER_FONTS,

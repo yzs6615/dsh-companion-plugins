@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { ChronoLife } from '../packages/core/kernel/chronolife/engine.mjs';
+import { ChronoLife } from '../packages/life/chronolife/engine.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OWNER = 10001;

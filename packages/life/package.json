@@ -11,9 +11,21 @@
   },
   "files": [
     "README.md",
+    "bili",
+    "chronolife",
     "cordis.patch.yml",
+    "env.mjs",
+    "imagegen.mjs",
     "index.js",
-    "module.mjs"
+    "life",
+    "media",
+    "module.mjs",
+    "postcard",
+    "radio",
+    "radio.mjs",
+    "radio.patch.yml",
+    "scene",
+    "wav.mjs"
   ],
   "engines": {
     "node": ">=22"

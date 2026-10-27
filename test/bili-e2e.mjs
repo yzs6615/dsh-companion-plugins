@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { danmakuPeaks, parseSidx, autoFrames } from '../packages/core/kernel/bili/lib.mjs';
+import { danmakuPeaks, parseSidx, autoFrames } from '../packages/life/bili/lib.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 let failed = false;
@@ -79,7 +79,7 @@ const data = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-bili-'));
 // 必须异步：同步跑子进程会把本进程里的假服务器堵死
 const run = (...args) =>
   new Promise((resolve) => {
-    const p = spawn(process.execPath, [path.join(ROOT, 'packages', 'core', 'kernel', 'bili', 'bili.mjs'), ...args], {
+    const p = spawn(process.execPath, [path.join(ROOT, 'packages', 'life', 'bili', 'bili.mjs'), ...args], {
       env: { ...process.env, BRIDGE_DATA: data, BILI_API: 'http://127.0.0.1:3994', BILIBILI_SESSDATA: '' },
     });
     let out = '';

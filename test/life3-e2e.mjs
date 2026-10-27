@@ -72,7 +72,7 @@ const data = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-life3-'));
 const lifeEnv = { ...process.env, BRIDGE_DATA: data, LIFE_ZHIHU_API: 'http://127.0.0.1:3989/zhihu', LIFE_WEIBO_API: 'http://127.0.0.1:3989/weibo', LIFE_MUSIC_API: 'http://127.0.0.1:3989/music', LIFE_BILI_API: 'http://127.0.0.1:3989/bili' };
 const life = (...args) =>
   new Promise((resolve) => {
-    const p = spawn(process.execPath, [path.join(ROOT, 'packages', 'core', 'kernel', 'life', 'life.mjs'), ...args], { env: lifeEnv });
+    const p = spawn(process.execPath, [path.join(ROOT, 'packages', 'life', 'life', 'life.mjs'), ...args], { env: lifeEnv });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));

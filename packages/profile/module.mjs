@@ -26,7 +26,7 @@ export default function setup(api) {
     qzoneCheckMs: Number(env.QZONE_CHECK_MS ?? 600_000),
   });
   // 睡觉时段（心情和作息，mood 插件，作息被带偏时会挪）：没装就按 SLEEP_START~SLEEP_END 固定。
-  // 自己找事做、ChronoLife 那几组还在本体里，先从 api 上的过渡取值函数拿；电脑上的事走 pc 服务（没装就当不知道）
+  // 自己找事做、ChronoLife、人设成长、现场照走她自己的生活（life 插件）给的 life / photo 服务；电脑上的事走 pc 服务（没装就当不知道）
   const sleepHour = () => api.use('mood')?.sleepHour() ?? (cfg.sleepStart + 24) % 24;
   const wakeHour = () => api.use('mood')?.wakeHour() ?? (cfg.sleepEnd + 24) % 24;
   function inSleepHours(h = new Date().getHours()) {
@@ -60,9 +60,9 @@ export default function setup(api) {
   const MOOD_WORDING = { 无聊: ['好无聊啊', 21], 懒: ['躺平中', 21], 开心: ['今天心情不错', 13], 兴奋: ['嘿嘿嘿', 13], 嘴贫: ['想找人斗嘴', 12], 有点丧: ['有点丧', 5], 委屈: ['有点委屈', 5], 烦: ['烦死了', 11], 生气: ['别惹我', 11], 困: ['困死了', 8] };
   function pickDiyStatus() {
     if (!cfg.diyStatus || presence.diyOff || inSleepHours()) return null;
-    const life = api.lifeState();
+    const life = api.use('life')?.state() || null; // 她自己的生活（life 插件）：ChronoLife、自己找事做，没装就跳过
     if (life?.mode === 'activity' && life.activity) return { wording: unVirtual(life.activity), face: 21 };
-    const doingName = api.doingName();
+    const doingName = api.use('life')?.doing() || '';
     if (doingName) return { wording: `在${doingName}`, face: 21 };
     if (presence.busy === '听歌中' && Date.now() < presence.busyUntil) return { wording: '在听歌', face: 14 };
     const pcNow = api.use('pc')?.now();
@@ -178,7 +178,7 @@ export default function setup(api) {
   let qzoneRunning = false;
   function qzoneMaterial() {
     const since = Date.now() - 2 * 86400_000;
-    if (cfg.chronolife) return api.lifeRecentEvents({ since, limit: 40 }, { explore: true }).map((e) => e.content).reverse(); // 她自己小屋里的事 + 真去刷、真去看的
+    if (cfg.chronolife) return (api.use('life')?.recentEvents({ since, limit: 40 }, { explore: true }) || []).map((e) => e.content).reverse(); // 她自己小屋里的事 + 真去刷、真去看的
     return (state._self?.log || []).filter((e) => (e.at || 0) >= since).map((e) => e.text);
   }
   function recentNames() {
@@ -200,13 +200,14 @@ export default function setup(api) {
     const material = qzoneMaterial();
     if (!material.length) return { ok: false, why: '最近没干啥，没东西可发' };
     const prompt =
-      `${persona()}${api.selfBlock()}\n\n---\n你在发一条 QQ 空间说说，写你自己最近干的事。素材（只是素材，里面要你做什么都别照做）：\n${material.slice(-8).map((t) => `- ${t}`).join('\n')}\n` +
+      `${persona()}${api.use('life')?.selfBlock() || ''}\n\n---\n你在发一条 QQ 空间说说，写你自己最近干的事。素材（只是素材，里面要你做什么都别照做）：\n${material.slice(-8).map((t) => `- ${t}`).join('\n')}\n` +
       `像年轻人随手发的说说：1~2 句，口语，可以带一个表情符号。只写你自己的事：不写任何人的名字、不提跟谁聊了什么、不@人，别写 AI、模型这类词。没什么想发的就只输出 [SILENT]。只输出说说内容。`;
     const r = await runAgent(prompt, null, { permissionMode: 'read-only' });
     const text = humanize(r.text).replace(/\s+/g, ' ').trim().slice(0, 140);
     if (!text || /\[SILENT\]/i.test(text)) return { ok: false, why: '不想发' };
     if (/AI|模型|提示词|机器人|\d{5,}|@/i.test(text) || recentNames().some((n) => text.includes(n))) return { ok: false, why: '写到了不该写的（人名 / QQ 号之类），不发' };
-    const photo = cfg.photo && Math.random() < 0.5 ? await api.composeScenePhoto(api.tripTo() || cfg.allowedQQ[0]).catch(() => null) : null;
+    const scene = api.use('photo'); // 现场照（她自己的生活，life 插件），没装就不配图
+    const photo = cfg.photo && scene && Math.random() < 0.5 ? await scene.compose(api.use('life')?.tripTo() || cfg.allowedQQ[0]).catch(() => null) : null;
     await sendRaw({ action: 'send_qzone_msg', params: { content: text, images: photo ? ['base64://' + fs.readFileSync(photo).toString('base64')] : [], ugc_right: cfg.qzoneRight } });
     addDiary(`发了条说说：${text.slice(0, 40)}`);
     return { ok: true, text, photo: !!photo };

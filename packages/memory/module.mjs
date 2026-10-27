@@ -29,10 +29,10 @@ export default function setup(api) {
     journalDays: Number(env.JOURNAL_DAYS ?? 7), // 聊天时带最近几天的日记
     journalCheckMs: Number(env.JOURNAL_CHECK_MS ?? 600_000),
   });
-  // 开着 ChronoLife 时，删掉的记忆由它在 context:filter 里拦（ChronoLife 还在本体）：读长期事实、日记时每一条也过一遍；
-  // 开着 ChronoLife 但它没起来（memoryOff），长期事实、日记都当没有，跟短期记忆一样
+  // 开着 ChronoLife 时，删掉的记忆由它在 context:filter 里拦（她自己的生活，life 插件）：读长期事实、日记时每一条也过一遍；
+  // 开着 ChronoLife 但它没起来（memoryOff），长期事实、日记都当没有，跟短期记忆一样。没装 life 就都照常
   const filter = (chatKey, text) => api.pipe('context:filter', text, chatKey);
-  const memoryOff = () => api.memoryOff();
+  const memoryOff = () => !!api.use('life')?.memoryOff();
 
   // ── 长期事实 + 回访 ───────────────────────────────────────────────────────
   // 滚动的聊天记录会被冲掉，所以隔几轮让模型把“值得长期记住的事”提炼出来，

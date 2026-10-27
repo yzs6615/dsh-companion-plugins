@@ -3,15 +3,15 @@
  * 刷 B站：不用手机，直接走 B站网页接口。默认不登录（buvid + wbi 签名），
  * .env 里有 BILIBILI_SESSDATA 时能读 AI 字幕。
  *
- *   node agent-bridge/bili/bili.mjs hot [条数]                  热门
- *   node agent-bridge/bili/bili.mjs rank [条数]                 全站排行
- *   node agent-bridge/bili/bili.mjs search 关键词 [--n 8] [--order click|pubdate]
- *   node agent-bridge/bili/bili.mjs watch BV号或链接 [--listen 3] [--frames]
+ *   node bili/bili.mjs hot [条数]                  热门
+ *   node bili/bili.mjs rank [条数]                 全站排行
+ *   node bili/bili.mjs search 关键词 [--n 8] [--order click|pubdate]
+ *   node bili/bili.mjs watch BV号或链接 [--listen 3] [--frames]
  *        看一个视频：简介、标签、字幕（登录才有）、弹幕刷得最多的、热评；
  *        --listen N：没字幕时下载音轨用本地 Whisper 听前 N 分钟（慢，十几秒到一分钟）
  *        --frames [N]：挑弹幕最密的时刻 + 换镜头的地方 + 均匀铺开截图，去掉重复镜头，
  *          每 9 格拼一张（不写 N 就按时长：≤3 分钟 9 帧，≤10 分钟 18，再长 27），再用 read_image 看
- *   node agent-bridge/bili/bili.mjs seen [条数]                 最近看过的
+ *   node bili/bili.mjs seen [条数]                 最近看过的
  *
  * B站风控（412 / -352 / -412）时不硬刷：记 15 分钟冷却，期间直接说“歇会”。
  */
@@ -23,8 +23,8 @@ import { fileURLToPath } from 'node:url';
 import { strip, parseDanmaku, topDanmaku, autoFrames, danmakuPeaks, parseSidx } from './lib.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const { env } = await import('../config.mjs');
-const DATA = path.join(env.BRIDGE_DATA ? path.resolve(env.BRIDGE_DATA) : path.join(ROOT, 'data'), 'bili');
+const { env, DATA_DIR } = await import('../env.mjs'); // .env、数据目录（插件目录下的 env.mjs）
+const DATA = path.join(DATA_DIR, 'bili');
 const CACHE = path.join(DATA, 'cache.json');
 const SEEN = path.join(DATA, 'seen.json');
 const COOLDOWN = path.join(DATA, 'cooldown');

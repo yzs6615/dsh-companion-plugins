@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { makeWav } from '../packages/core/kernel/wav.mjs';
+import { makeWav } from '../packages/life/wav.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OWNER = 10001;

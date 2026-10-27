@@ -2,14 +2,14 @@
 /**
  * 刷别的（除了 B站）：知乎热榜、微博热搜、听歌（榜单 / 歌词 / 热评）、看番。都不用登录。
  *
- *   node agent-bridge/life/life.mjs zhihu [条数]          知乎热榜：问题、热度、摘要（回答要登录看不了）
- *   node agent-bridge/life/life.mjs weibo [条数]          微博热搜
- *   node agent-bridge/life/life.mjs music [飙升|热歌|新歌|原创]   网易云榜单
- *   node agent-bridge/life/life.mjs song 歌名或id          一首歌：歌词 + 网易云热评
- *   node agent-bridge/life/life.mjs anime [今天|这周]       B站新番时间表
- *   node agent-bridge/life/life.mjs anime-rank            番剧排行
- *   node agent-bridge/life/life.mjs anime-watch season_id    追一部番：简介、评分、最新一集、弹幕刷得最多的、热评（番剧画面大多要会员，不看）
- *   node agent-bridge/life/life.mjs seen                  最近看过的
+ *   node life/life.mjs zhihu [条数]          知乎热榜：问题、热度、摘要（回答要登录看不了）
+ *   node life/life.mjs weibo [条数]          微博热搜
+ *   node life/life.mjs music [飙升|热歌|新歌|原创]   网易云榜单
+ *   node life/life.mjs song 歌名或id          一首歌：歌词 + 网易云热评
+ *   node life/life.mjs anime [今天|这周]       B站新番时间表
+ *   node life/life.mjs anime-rank            番剧排行
+ *   node life/life.mjs anime-watch season_id    追一部番：简介、评分、最新一集、弹幕刷得最多的、热评（番剧画面大多要会员，不看）
+ *   node life/life.mjs seen                  最近看过的
  *
  * 看过的会记下来（data/life/seen.json），列表里标“（看过）”。
  */
@@ -18,9 +18,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseDanmaku, topDanmaku } from '../bili/lib.mjs';
 
-const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const { env } = await import('../config.mjs');
-const DATA = path.join(env.BRIDGE_DATA ? path.resolve(env.BRIDGE_DATA) : path.join(ROOT, 'data'), 'life');
+const { env, DATA_DIR } = await import('../env.mjs'); // .env、数据目录（插件目录下的 env.mjs）
+const DATA = path.join(DATA_DIR, 'life');
 const SEEN = path.join(DATA, 'seen.json');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const API = {

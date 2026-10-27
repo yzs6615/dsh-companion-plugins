@@ -8,8 +8,8 @@ import http from 'node:http';
 import { once } from 'node:events';
 import {
   createRadio, radioRequest, extractRadioTag, parseAsk, parseEpisode, splitSpeech, packVoices, findRadioSong, personaCore, cardText,
-} from '../packages/core/kernel/radio.mjs';
-import { makeWav, parseWav } from '../packages/core/kernel/wav.mjs';
+} from '../packages/life/radio.mjs';
+import { makeWav, parseWav } from '../packages/life/wav.mjs';
 
 let failed = 0;
 const t = async (name, fn) => {

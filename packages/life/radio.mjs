@@ -9,7 +9,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseWav, makeWav } from './wav.mjs';
-import { speakable } from './human.mjs';
+
+/** 念出来之前去掉念不了的东西：QQ 表情标记、链接、括号里的动作描写。跟本体 human.mjs 里的 speakable 一样（插件不 import 本体的文件）。 */
+function speakable(text) {
+  return String(text || '')
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/[（(][^）)]{0,20}[）)]/g, '')
+    .replace(/\s*\n+\s*/g, '，')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const SHORT_RE = /一分钟|1\s*分钟|短一点|短点的/;

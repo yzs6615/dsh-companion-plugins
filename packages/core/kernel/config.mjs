@@ -55,18 +55,8 @@ export const cfg = {
   quietHours: (env.QUIET_HOURS || '23-9').split('-').map(Number), // 这几个钟头不出声、不留条、不发空间（各插件主动做事前看 api.quiet()）
   memoryEnabled: (env.MEMORY || 'true') !== 'false',
   // 主动找谁（早安晚安、回访、写信在 proactive 插件里；自己找事做的分享、ChronoLife、明信片、主人是谁也认这个）
+  // 自己找事做、ChronoLife、做梦、人设成长、电台、明信片、现场照、收礼物的设置在她自己的生活（life）插件里
   proactiveQQ: parseList(env.PROACTIVE_QQ || ''),
-  autonomy: (env.AUTONOMY || 'false') === 'true',
-  autonomyMinutes: Number(env.AUTONOMY_MINUTES || 45), // 两次自己玩之间至少隔多久
-  autonomyMax: Number(env.AUTONOMY_MAX || 8), // 一天最多自己玩几次
-  autonomyRollProb: Number(env.AUTONOMY_ROLL_PROB ?? 0.35), // 每小时掷骰子“想不想玩”的基础概率（再按心情/精神调）
-  autonomyIdleMin: Number(env.AUTONOMY_IDLE_MIN ?? 20), // 对方这么多分钟内找过它，这小时就不自己玩（在陪人聊呢）
-  // ChronoLife旁存时间线；不开启时沿用旧行为。
-  chronolife: env.CHRONOLIFE === 'true',
-  chronolifeTimezone: env.CHRONOLIFE_TIMEZONE || 'Asia/Bangkok',
-  chronolifeTickMinutes: Number(env.CHRONOLIFE_TICK_MINUTES || 30),
-  chronolifeProactive: env.CHRONOLIFE_PROACTIVE === 'true',
-  chronolifeCheckMs: Number(env.CHRONOLIFE_CHECK_MS || 0), // 测试用：bridge 多久看一次（不填就按 CHRONOLIFE_TICK_MINUTES）
   // ── 拟人行为 ──
   mergeMs: Number(env.MERGE_MS ?? 5000), // 连发合并：对方停这么久没再发才回（手机打字一句要好几秒），0 关闭
   mergeMaxMs: Number(env.MERGE_MAX_MS ?? 15_000),
@@ -81,40 +71,11 @@ export const cfg = {
   react: (env.REACT || 'true') !== 'false', // “嗯嗯/哈哈”点表情回应，不调模型
   reactProb: Number(env.REACT_PROB ?? 0.7),
   ignoreLimit: Number(env.IGNORE_LIMIT ?? 2), // 主动找了几次都没回，就先不找了（等对方开口）
-  reflect: (env.REFLECT || 'true') !== 'false', // 生活 → 反思 → 人设成长
-  // 深夜电台：点一期，她录两三分钟的语音节目（节目卡 + 推荐一首歌）。没开语音就发文字版
-  radio: (env.RADIO || 'true') !== 'false',
-  radioMaxDay: Number(env.RADIO_MAX_DAY ?? 6), // 一天最多录几期（重播不算）
-  radioVoiceSec: Number(env.RADIO_VOICE_SEC ?? 58), // 拼成的每条语音最长几秒
-  radioCollectMs: Number(env.RADIO_COLLECT_MS ?? 6000), // 投稿连发几条：最后一条之后等这么久再开录
-  autonomyHours: (env.AUTONOMY_HOURS || '10-23').split('-').map(Number), // 自己找事做的时段
-  autonomyRollWindowMin: Number(env.AUTONOMY_ROLL_WINDOW_MIN ?? 45), // 每小时在前多少分钟里随机掷骰子
-  autonomyCheckMs: Number(env.AUTONOMY_CHECK_MS ?? 300_000),
   recall: (env.RECALL || 'true') !== 'false', // 对方撤回：没回的那条就不回了；熟人偶尔调侃一句
   recallTeaseProb: Number(env.RECALL_TEASE_PROB ?? 0.5),
   pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）。主人是谁本体也要用（写信、明信片、作息被带偏…），电脑上的她那些设置在 pc 插件里
-  // 做梦：早上醒来有时记得昨晚的梦（最近的事拼的），今天第一次聊天、或者早安时顺口说
-  dream: (env.DREAM || 'false') === 'true',
-  dreamProb: Number(env.DREAM_PROB ?? 0.5), // 每天每个人做梦的概率
-  dreamUntil: Number(env.DREAM_UNTIL ?? 12), // 睡醒（SLEEP_END）到几点之间做梦；过了这个点再三个小时就不提了
-  dreamCheckMs: Number(env.DREAM_CHECK_MS ?? 600_000),
-  // 现场照：问她在干嘛时，可能发一张“现在的她”（data/scene/bg 房间背景 × data/scene/pose 动作）
-  photo: (env.PHOTO || 'false') === 'true',
-  photoMaxDay: Number(env.PHOTO_MAX_DAY ?? 5),
-  // 百炼画图用哪个模型：信纸（每周一封信在 proactive 插件里）、收到的礼物都用它
-  letterModel: env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
-  // 旅行明信片：隔几周的周末她在自己的小世界里出去玩一趟（周五定去哪），周日下午给 PROACTIVE_QQ 寄一张明信片（正面百炼画当地风景）
-  postcard: (env.POSTCARD || 'false') === 'true',
-  postcardEveryWeeks: Number(env.POSTCARD_EVERY_WEEKS ?? 3),
-  postcardModel: env.POSTCARD_IMAGE_MODEL || env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
-  postcardCheckMs: Number(env.POSTCARD_CHECK_MS ?? 600_000),
   media: (env.MEDIA || 'true') !== 'false', // 看懂发来的视频（抽帧 + 听）和文件
   mediaMaxMB: Number(env.MEDIA_MAX_MB ?? 60),
-  reflectHour: Number(env.REFLECT_HOUR ?? 22), // 每天几点后回想一次
-  reflectCheckMs: Number(env.REFLECT_CHECK_MS ?? 600_000),
-  selfMax: Number(env.SELF_MAX ?? 30), // “最近的自己”最多几条
-  selfForgetDays: Number(env.SELF_FORGET_DAYS ?? 14), // 多久没再印证就忘掉
-  recentForgetDays: Number(env.RECENT_FORGET_DAYS ?? 5), // “最近在看”忘得快
 };
 
 export function parseList(value) {
