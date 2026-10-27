@@ -51,7 +51,7 @@ export const cfg = {
   personaFile: env.PERSONA_FILE || path.join(HOME, 'persona.md'),
   humanSplit: (env.HUMAN_SPLIT || 'true') !== 'false',
   botName: env.BOT_NAME || '小伴', // 启动器 / 状态窗口 / 功能页上显示的名字
-  wakeWords: parseList(env.WAKE_WORDS || env.BOT_NAME || '小伴'),
+  wakeWords: parseList(env.WAKE_WORDS || env.BOT_NAME || '小伴'), // 机器人的名字：群里叫这些词能把它叫出来，私聊点电台时也会去掉
   memoryEnabled: (env.MEMORY || 'true') !== 'false',
   proactive: (env.PROACTIVE || 'false') === 'true',
   proactiveQQ: parseList(env.PROACTIVE_QQ || ''),
@@ -83,18 +83,12 @@ export const cfg = {
   facts: (env.FACTS || 'true') !== 'false',
   factsEvery: Number(env.FACTS_EVERY ?? 6),
   followup: (env.FOLLOWUP || 'true') !== 'false',
-  groupQuote: (env.GROUP_QUOTE || 'true') !== 'false',
-  groupFollowSec: Number(env.GROUP_FOLLOW_SEC ?? 45), // @ 过之后，同一个人接着说不用再 @
-  poke: (env.POKE || 'true') !== 'false',
   react: (env.REACT || 'true') !== 'false', // “嗯嗯/哈哈”点表情回应，不调模型
   reactProb: Number(env.REACT_PROB ?? 0.7),
   followupHours: (env.FOLLOWUP_HOURS || '9-22').split('-').map(Number), // 回访只在这个时段
   followupCheckMs: Number(env.FOLLOWUP_CHECK_MS ?? 120_000),
   followupIdleSec: Number(env.FOLLOWUP_IDLE_SEC ?? 180), // 对方刚说完话这么久之内不回访，免得打断
   greetings: (env.GREETINGS || 'true') !== 'false', // 早安/晚安/久未联系的冒泡
-  chimeProb: Number(env.CHIME_PROB ?? 0.03), // 群里没被叫也插嘴的基础概率，0 关闭
-  chimeCooldownMin: Number(env.CHIME_COOLDOWN_MIN ?? 20),
-  chimeMaxDay: Number(env.CHIME_MAX_DAY ?? 6),
   learnStyle: (env.LEARN_STYLE || 'true') !== 'false', // 学对方的口头禅/说话习惯（跟长期事实一起提炼，不多花调用）
   stealStickers: (env.STEAL_STICKERS || 'true') !== 'false', // 对方发的表情包，觉得好玩就收进自己的表情库
   stealMax: Number(env.STEAL_MAX ?? 40), // 每种情绪最多留几张收来的
