@@ -10,11 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getWeather, cachedWeather, notable, describe as describeWeather } from './weather.mjs';
 
-export default function setup(api) {
-  const { cfg, env, log, readJson, parseList, state, saveState, userState, persona, memoryFile, runAgent, DATA_DIR } = api;
-  const { reply } = api;
-  const { dayKey, nowDesc, logicalTime, computeRhythm, rhythmNote, unknownTopics, parseJsonLoose, parseLocalTime } = api.human;
-  Object.assign(cfg, {
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
     facts: (env.FACTS || 'true') !== 'false',
     factsEvery: Number(env.FACTS_EVERY ?? 6),
     rhythm: (env.RHYTHM || 'true') !== 'false', // 记得对方几点睡几点起，晚睡早起会注意到
@@ -28,7 +26,14 @@ export default function setup(api) {
     journalHour: Number(env.JOURNAL_HOUR ?? 23), // 几点后写当天的日记（没写成第二天补）
     journalDays: Number(env.JOURNAL_DAYS ?? 7), // 聊天时带最近几天的日记
     journalCheckMs: Number(env.JOURNAL_CHECK_MS ?? 600_000),
-  });
+  };
+}
+
+export default function setup(api) {
+  const { cfg, env, log, readJson, parseList, state, saveState, userState, persona, memoryFile, runAgent, DATA_DIR } = api;
+  const { reply } = api;
+  const { dayKey, nowDesc, logicalTime, computeRhythm, rhythmNote, unknownTopics, parseJsonLoose, parseLocalTime } = api.human;
+  Object.assign(cfg, settings(env, api.parseList));
   // 开着 ChronoLife 时，删掉的记忆由它在 context:filter 里拦（她自己的生活，life 插件）：读长期事实、日记时每一条也过一遍；
   // 开着 ChronoLife 但它没起来（memoryOff），长期事实、日记都当没有，跟短期记忆一样。没装 life 就都照常
   const filter = (chatKey, text) => api.pipe('context:filter', text, chatKey);
@@ -476,4 +481,40 @@ export default function setup(api) {
     log(`日记: 每天 ${cfg.journalHour} 点后写一篇，聊天时带上最近 ${cfg.journalDays} 天`);
     api.every(cfg.journalCheckMs, checkJournal, 60_000);
   }
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。person 给“每个人”那张卡片补上记得的事、说话习惯、回访待办。
+ */
+export function features(cfg, { DATA_DIR, state, readJson, esc, when, on }) {
+  const clockOfMin = (m) => { const x = (m + 300) % 1440; return `${Math.floor(x / 60)}:${String(x % 60).padStart(2, '0')}`; };
+  const factsOf = (chatKey) => {
+    const f = readJson(path.join(DATA_DIR, 'memory', `${chatKey.replace(/[^a-zA-Z0-9:_-]/g, '_')}.facts.json`), null);
+    return { facts: Array.isArray(f?.facts) ? f.facts : [], followups: Array.isArray(f?.followups) ? f.followups : [], style: Array.isArray(f?.style) ? f.style : [] };
+  };
+  return {
+    groups: [
+      ['记得你', [
+        ['长期事实', on(cfg.facts), `每 ${cfg.factsEvery} 轮提炼一次，提到考试/生日/称呼等要紧事 2 轮后提前`, '让模型把聊天提炼成长期记得的事（每人最多 40 条），以后的对话会带上。', 10],
+        ['记得你的作息', on(cfg.rhythm), (() => { const qs = Object.entries(state).filter(([k, v]) => /^\d+$/.test(k) && v?.rhythm); return qs.length ? qs.map(([k, v]) => `${k}：平时 ${clockOfMin(v.rhythm.wake)} 冒头、${clockOfMin(v.rhythm.sleep)} 没动静（${v.rhythm.days} 天）`).join('；') : '聊满 4 天才看得出'; })(), '从聊天时间摸清你平时几点冒头、几点没动静；今天比平时晚睡、早起，她会注意到，顺口说一句（一天只说一次）。', 30],
+        ['对你好奇', on(cfg.curious), `每轮 ${Math.round(cfg.curiousProb * 100)}% 提醒她一次，一天最多一次`, '记住的事里还没提到的方面（是干嘛的、住哪、喜欢干嘛、爱吃啥、养没养猫狗、生日），她会找机会自然地问一句，同一个方面一周内不重复。', 40],
+        ['纪念日和天气', on(cfg.anniversary || cfg.weather), cfg.weatherCity ? `默认城市：${cfg.weatherCity}` : '在 QQ 里发 /城市 杭州 告诉她你在哪', '认识第 100 天、周年、你的生日（/生日 5-20）那天她心里知道，上午会主动说一句；你那边下雨、降温、很热很冷时会顺口提醒（天气来自 Open-Meteo，免费）。认识的日子可以在 .env 写 MEET_DATE=QQ号:2025-05-15。', 50],
+        ['日记', on(cfg.journal), (() => { let days = []; try { days = fs.readdirSync(path.join(DATA_DIR, 'journal')).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort(); } catch {} return days.length ? `写了 ${days.length} 篇，最近一篇 ${days.at(-1).slice(0, 10)} · 每天 ${cfg.journalHour} 点后写 · 聊天带最近 ${cfg.journalDays} 天` : `还没写过 · 每天 ${cfg.journalHour} 点后写`; })(), '白天每轮聊天记一行流水（一直留着），睡前用自己的口吻写当天的日记：今天干了啥、什么心情，再给每个聊过的人记一行聊了啥。聊天时带上最近几天的日记，但只带跟这个人的那行，跟 A 聊的不会出现在跟 B 的对话里；更早的只留跟这个人有关的，当长期记忆。/日记 看最新一篇；日记网页（见下面“工具和文件”）能选日期翻、能搜。', 60],
+      ]],
+    ],
+    commands: [
+      ['/城市 杭州', '告诉她你在哪（看天气用）；单发 /城市 看她记的是哪', 80],
+      ['/生日 5-20', '告诉她你的生日', 90],
+      ['/日记', '看她最新一篇日记', 110],
+    ],
+    person: (qq) => {
+      const { facts, followups, style } = factsOf(`u${qq}`);
+      const pending = followups.filter((f) => !f.done);
+      return `<details><summary>它记得的事（${facts.length} 条）</summary>${facts.length ? `<ul>${facts.map((f) => `<li>${esc(f.t)}</li>`).join('')}</ul>` : '<div class="how">还没有</div>'}</details>
+<details><summary>学到的说话习惯（${style.length} 条）</summary>${style.length ? `<ul>${style.map((x) => `<li>${esc(x.t)}</li>`).join('')}</ul>` : '<div class="how">还没学到</div>'}</details>
+<details><summary>回访待办（${pending.length} 个）</summary>${pending.length ? `<ul>${pending.map((f) => `<li>${esc(when(f.due))}：${esc(f.ask)}</li>`).join('')}</ul>` : '<div class="how">没有</div>'}</details>
+`;
+    },
+  };
 }
