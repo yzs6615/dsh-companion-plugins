@@ -1,0 +1,4 @@
+# dsh-companion-life（她自己的生活）：装上就挂进 DSH。要先装 dsh-companion-core。
+- insert:
+    - id: companion-life
+      name: 'dsh-companion-life'
