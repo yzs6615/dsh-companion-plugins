@@ -43,13 +43,17 @@ export default function setup(api) {
     letterHour: Number(env.LETTER_HOUR ?? 21),
     letterCheckMs: Number(env.LETTER_CHECK_MS ?? 600_000),
   });
-  // 长期事实（记得你，memory）还在本体，本体就地给了 facts 服务；没有就当什么都不记得
+  // 长期事实（记得你，memory 插件）：没装就当什么都不记得
   const readFacts = (chatKey) => api.use('facts')?.readFacts(chatKey) || { facts: [], followups: [], style: [] };
   const writeFacts = (chatKey, data) => api.use('facts')?.writeFacts(chatKey, data);
   // 学某个人说话那段（说话的样子，speech 插件）：没装就不带
   const mimicBlock = () => api.use('mimic')?.block() || '';
-  // 下面这几样还在本体里（做梦、纪念日、日记、现场照那几组还没搬），先从 api 上的过渡取值函数拿
-  const { selfBlock, takeDream, specialToday, journalDays, readJournal } = api;
+  // 纪念日、日记（记得你，memory 插件）：没装就当今天不是什么日子、没写过日记
+  const specialToday = (qq) => api.use('anniversary')?.today(qq) || '';
+  const journalDays = () => api.use('journal')?.days() || [];
+  const readJournal = (d) => api.use('journal')?.read(d) ?? null;
+  // 下面这几样还在本体里（人设成长、做梦、现场照那几组还没搬），先从 api 上的过渡取值函数拿
+  const { selfBlock, takeDream } = api;
   const shortDay = (d) => d.slice(5);
 
   /** 让模型自己写主动消息：带记忆、带时间，能分享点东西。不再有固定模板兜底。 */
@@ -397,8 +401,12 @@ export default function setup(api) {
   });
 
   // ── 定时和启动日志（原来在 main 段末尾）────────────────────────────────────
-  if (cfg.proactive && cfg.followup && cfg.facts) {
-    log(`回访: 每 ${Math.round(cfg.followupCheckMs / 1000)}s 看一眼，${cfg.followupHours.join('-')} 点之间`);
+  // 回访要看长期事实开没开：cfg.facts 是记得你（memory 插件）挂上的，插件加载有先后，这里还不一定有，
+  // 所以日志等全部插件加载完（startup）再打；定时照开，没开长期事实时 checkFollowups 自己会直接返回
+  if (cfg.proactive && cfg.followup) {
+    api.on('startup', () => {
+      if (cfg.facts) log(`回访: 每 ${Math.round(cfg.followupCheckMs / 1000)}s 看一眼，${cfg.followupHours.join('-')} 点之间`);
+    });
     api.every(cfg.followupCheckMs, checkFollowups);
   }
   if (cfg.proactive && cfg.greetings) {
