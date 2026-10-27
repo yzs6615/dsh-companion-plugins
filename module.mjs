@@ -12,11 +12,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PHONE = path.join(HERE, 'phone', 'phone.mjs');
 const LIVE = path.join(HERE, 'live');
 
+/** 这个插件的设置（默认值只写在这里）：setup 里挂到 cfg 上；功能页（本体的 scripts/features.mjs）不跑 setup 也能拿到同样的值。 */
+export function settings(env, parseList) {
+  return {
+    phoneMonitor: (env.PHONE_MONITOR || 'true') !== 'false',
+  };
+}
+
 export default function setup(api) {
   const { cfg, env, log, reply, pick, sleep, DATA_DIR } = api;
-  Object.assign(cfg, {
-    phoneMonitor: (env.PHONE_MONITOR || 'true') !== 'false',
-  });
+  Object.assign(cfg, settings(env, api.parseList));
 
   // ── phone watchdog ────────────────────────────────────────────────────────
   // 只在它这一轮真的动了手机（phone.mjs / phone_live.py 会记一笔 data/phone-used）之后才盯屏幕：
@@ -98,4 +103,18 @@ node "${PHONE}" text "你好"
 转文字要本地的 whisper 模型（.env 的 WHISPER_MODEL_DIR）。
 `);
   log(`手机：${cfg.phoneMonitor ? '用着手机时黑屏/锁屏会悄悄解开' : '看门狗关着'}`);
+}
+
+/**
+ * 功能页（本体的 scripts/features.mjs）上这个插件的几行：不跑 setup，cfg 里已经挂好了各插件 settings() 的值。
+ * 格式见 docs/插件接口.md 的“功能页”。“手机和权限”这组里排在本体的守护（10）和权限模式（30）中间。
+ */
+export function features(cfg, { on }) {
+  return {
+    groups: [
+      ['手机和权限', [
+        ['手机看门狗', on(cfg.phoneMonitor), '只在它正在用手机时才看', '它自己想玩手机、或者你让它看手机，用着用着屏幕黑了/锁了就悄悄解开；平时手机锁着不去碰。解不开才跟你说。', 20],
+      ]],
+    ],
+  };
 }
