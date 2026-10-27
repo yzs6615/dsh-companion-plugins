@@ -1,4 +1,4 @@
-"""唱歌脚本用到的 Seed-VC 位置，都从环境变量或 agent-bridge/.env 读，别处装的改 .env 就行。
+"""唱歌脚本用到的 Seed-VC 位置，都从环境变量或 .env（COMPANION_HOME 里那份，没设就是插件目录里的）读，别处装的改 .env 就行。
 
 SEEDVC_HOME        整理好的一套（VoiceWave 那种目录：models\\ dist\\ .venv\\），填了它下面几项都有默认值
 SEEDVC_RUNTIME     Seed-VC 代码目录（有 inference.py / train.py 的那个）
@@ -12,7 +12,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]  # 插件目录（sing/ 的上一层）
+# .env、数据目录跟内核认的一样：装进 DSH 时在 COMPANION_HOME，没设就在插件目录；数据目录 BRIDGE_DATA 优先
+COMPANION = Path(os.environ['COMPANION_HOME']) if os.environ.get('COMPANION_HOME') else ROOT
+DATA = Path(os.environ['BRIDGE_DATA']) if os.environ.get('BRIDGE_DATA') else COMPANION / 'data'
 
 
 def env(name: str, default: str = '') -> str:
@@ -20,7 +23,7 @@ def env(name: str, default: str = '') -> str:
     if v:
         return v
     try:
-        for line in (ROOT / '.env').read_text(encoding='utf-8').splitlines():
+        for line in (COMPANION / '.env').read_text(encoding='utf-8').splitlines():
             line = line.strip()
             if line.startswith(name + '='):
                 return line.split('=', 1)[1].strip().strip('"\'') or default
@@ -35,9 +38,9 @@ TORCH_PATH = env('SEEDVC_TORCH_PATH', os.path.join(HOME, 'dist', 'VoiceWave-CUDA
 MODELS = env('SEEDVC_MODELS', os.path.join(HOME, 'models') if HOME else '')
 PYTHON = env('SEEDVC_PY', os.path.join(HOME, '.venv', 'Scripts', 'python.exe') if HOME else 'python')
 BASE_CKPT = env('SEEDVC_BASE_CKPT', os.path.join(MODELS, 'seedvc-sing-44k', 'DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth') if MODELS else '')
-MODEL_DIR = ROOT / 'data' / 'sing-model'
+MODEL_DIR = DATA / 'sing-model'
 
 
 def require_runtime() -> None:
     if not RUNTIME or not os.path.exists(os.path.join(RUNTIME, 'inference.py')):
-        raise SystemExit('没找到 Seed-VC：先装好 Seed-VC，再在 agent-bridge\\.env 里填 SEEDVC_RUNTIME（或 SEEDVC_HOME）')
+        raise SystemExit('没找到 Seed-VC：先装好 Seed-VC，再在 .env 里填 SEEDVC_RUNTIME（或 SEEDVC_HOME）')

@@ -8,11 +8,39 @@
  *   node scripts/sticker-index.mjs --dry    # 只看有多少张要写
  *   node scripts/sticker-index.mjs --limit 6   # 先试几张
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { cfg, env, ROOT } from '../config.mjs';
 import { parseJsonLoose } from '../human.mjs';
-import { listStickers, readIndex, writeIndex } from '../stickers.mjs';
+
+// 表情库怎么放、index.json 怎么写，跟 speech 插件（说话的样子）的 stickers.mjs 一样；这个脚本要用本体的设置调模型，所以抄一份在这里
+const MOODS = ['开心', '无语', '生气', '卖萌', '得意', '委屈', '震惊'];
+const IMG = /\.(png|jpe?g|gif|webp)$/i;
+function readIndex(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'index.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+function writeIndex(dir, idx) {
+  const f = path.join(dir, 'index.json');
+  fs.writeFileSync(f + '.tmp', JSON.stringify(idx, null, 1));
+  fs.renameSync(f + '.tmp', f);
+}
+/** 库里所有图：[{ rel: '开心/a.png', mood, file }] */
+function listStickers(dir) {
+  const out = [];
+  for (const mood of MOODS) {
+    let files = [];
+    try {
+      files = fs.readdirSync(path.join(dir, mood)).filter((f) => IMG.test(f));
+    } catch {}
+    for (const f of files) out.push({ rel: `${mood}/${f}`, mood, file: path.join(dir, mood, f) });
+  }
+  return out;
+}
 
 const argv = process.argv.slice(2);
 const DATA_DIR = env.BRIDGE_DATA ? path.resolve(env.BRIDGE_DATA) : path.join(ROOT, 'data');

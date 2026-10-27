@@ -9,7 +9,7 @@ import { once } from 'node:events';
 import {
   createRadio, radioRequest, extractRadioTag, parseAsk, parseEpisode, splitSpeech, packVoices, findRadioSong, personaCore, cardText,
 } from '../packages/core/kernel/radio.mjs';
-import { makeWav, parseWav } from '../packages/core/kernel/tts.mjs';
+import { makeWav, parseWav } from '../packages/core/kernel/wav.mjs';
 
 let failed = 0;
 const t = async (name, fn) => {

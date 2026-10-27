@@ -23,12 +23,10 @@ import numpy as np
 import soundfile as sf
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-DATA = Path(os.environ['BRIDGE_DATA']) if os.environ.get('BRIDGE_DATA') else ROOT / 'data'
-MODEL_DIR = ROOT / 'data' / 'sing-model'
-SONGS = Path(os.environ['SONG_DIR']) if os.environ.get('SONG_DIR') else DATA / 'songs'
 sys.path.insert(0, str(HERE))
-from paths import PYTHON as VW_PY  # noqa: E402  跑 Seed-VC 的 python（.env 里的 SEEDVC_PY / SEEDVC_HOME）
+# 数据目录（BRIDGE_DATA，没设就是 COMPANION_HOME/data）、微调的唱歌模型目录、跑 Seed-VC 的 python（.env 里的 SEEDVC_PY / SEEDVC_HOME）
+from paths import DATA, MODEL_DIR, PYTHON as VW_PY  # noqa: E402
+SONGS = Path(os.environ['SONG_DIR']) if os.environ.get('SONG_DIR') else DATA / 'songs'
 
 
 def run(cmd: list[str], env_extra: dict | None = None) -> None:

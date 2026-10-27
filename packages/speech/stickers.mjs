@@ -1,7 +1,7 @@
 /**
  * 表情库：data/stickers/<情绪>/ 里的图 + index.json 里每张图的一句描述（“熊猫头翻白眼：无语、看不下去”）。
  * 模型写 [表情:想表达的意思]，按描述挑最贴的一张；写的是七种情绪之一就按情绪目录随机挑。
- * 描述用 scripts/sticker-index.mjs 让模型看图写（收来的新表情包 bridge 会自己补）。
+ * 描述用本体的 kernel/scripts/sticker-index.mjs 让模型看图写（收来的新表情包这个插件会自己补）。
  */
 import fs from 'node:fs';
 import path from 'node:path';

@@ -12,7 +12,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { makeWav } from '../packages/core/kernel/tts.mjs';
+import { makeWav } from '../packages/core/kernel/wav.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const OWNER = 10001;
