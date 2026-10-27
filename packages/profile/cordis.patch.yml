@@ -1,0 +1,4 @@
+# dsh-companion-profile（QQ 上的样子）：装上就挂进 DSH。要先装 dsh-companion-core。
+- insert:
+    - id: companion-profile
+      name: 'dsh-companion-profile'

@@ -1,0 +1,40 @@
+{
+  "name": "dsh-companion-life",
+  "version": "0.1.0",
+  "description": "她自己的生活：ChronoLife 小屋、自己找事做（刷 B站、听歌、看番）、做梦、人设成长、深夜电台、旅行明信片、现场照、收礼物。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "index.js",
+    "module.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzs6615/dsh-companion-plugins.git",
+    "directory": "packages/life"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat"
+  ],
+  "license": "MIT"
+}

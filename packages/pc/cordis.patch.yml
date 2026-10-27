@@ -1,0 +1,4 @@
+# dsh-companion-pc（电脑上的她）：装上就挂进 DSH。要先装 dsh-companion-core。
+- insert:
+    - id: companion-pc
+      name: 'dsh-companion-pc'

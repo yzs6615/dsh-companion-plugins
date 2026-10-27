@@ -1,0 +1,40 @@
+{
+  "name": "dsh-companion-core",
+  "version": "0.1.0",
+  "description": "本体：连 QQ（NapCat / OneBot 11）、聊天、人设、短期记忆、熟悉度、白名单和权限；别的插件都装在它上面。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "index.js",
+    "kernel"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzs6615/dsh-companion-plugins.git",
+    "directory": "packages/core"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat"
+  ],
+  "license": "MIT"
+}

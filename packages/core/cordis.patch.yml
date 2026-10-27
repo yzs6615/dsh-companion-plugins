@@ -1,0 +1,7 @@
+# dsh-companion-core（本体）：装上就挂进 DSH。
+- insert:
+    - id: companion-core
+      name: 'dsh-companion-core'
+      config:
+        home: ''        # 留空 = $DSH_HOME/companion（放 .env、persona.md、聊天数据）
+        autoStart: true

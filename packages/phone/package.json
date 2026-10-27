@@ -1,0 +1,40 @@
+{
+  "name": "dsh-companion-phone",
+  "version": "0.1.0",
+  "description": "手机：用 adb 控制安卓手机（截图、点按、输入），手机看门狗，看手机直播。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "index.js",
+    "module.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzs6615/dsh-companion-plugins.git",
+    "directory": "packages/phone"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat"
+  ],
+  "license": "MIT"
+}

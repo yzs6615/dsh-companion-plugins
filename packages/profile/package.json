@@ -1,0 +1,40 @@
+{
+  "name": "dsh-companion-profile",
+  "version": "0.1.0",
+  "description": "QQ 上的样子：在线状态和个签、自定义在线状态、心情头像、QQ 空间说说。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "index.js",
+    "module.mjs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzs6615/dsh-companion-plugins.git",
+    "directory": "packages/profile"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat"
+  ],
+  "license": "MIT"
+}

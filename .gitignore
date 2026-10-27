@@ -1,0 +1,8 @@
+node_modules/
+data/
+.env
+persona.md
+dist/
+*.log
+.dsh-home/
+scripts/private-words.txt
