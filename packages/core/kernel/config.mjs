@@ -54,16 +54,13 @@ export const cfg = {
   wakeWords: parseList(env.WAKE_WORDS || env.BOT_NAME || '小伴'), // 机器人的名字：群里叫这些词能把它叫出来，私聊点电台时也会去掉
   quietHours: (env.QUIET_HOURS || '23-9').split('-').map(Number), // 这几个钟头不出声、不留条、不发空间（各插件主动做事前看 api.quiet()）
   memoryEnabled: (env.MEMORY || 'true') !== 'false',
-  proactive: (env.PROACTIVE || 'false') === 'true',
+  // 主动找谁（早安晚安、回访、写信在 proactive 插件里；自己找事做的分享、ChronoLife、明信片、主人是谁也认这个）
   proactiveQQ: parseList(env.PROACTIVE_QQ || ''),
-  proactiveMax: Number(env.PROACTIVE_MAX || 2),
-  proactiveIdleHours: Number(env.PROACTIVE_IDLE_HOURS || 8),
   autonomy: (env.AUTONOMY || 'false') === 'true',
   autonomyMinutes: Number(env.AUTONOMY_MINUTES || 45), // 两次自己玩之间至少隔多久
   autonomyMax: Number(env.AUTONOMY_MAX || 8), // 一天最多自己玩几次
   autonomyRollProb: Number(env.AUTONOMY_ROLL_PROB ?? 0.35), // 每小时掷骰子“想不想玩”的基础概率（再按心情/精神调）
   autonomyIdleMin: Number(env.AUTONOMY_IDLE_MIN ?? 20), // 对方这么多分钟内找过它，这小时就不自己玩（在陪人聊呢）
-  proactiveLLM: (env.PROACTIVE_LLM || 'true') !== 'false',
   // ChronoLife旁存时间线；不开启时沿用旧行为。
   chronolife: env.CHRONOLIFE === 'true',
   chronolifeTimezone: env.CHRONOLIFE_TIMEZONE || 'Asia/Bangkok',
@@ -83,13 +80,8 @@ export const cfg = {
   typoProb: Number(env.TYPO_PROB ?? 0.04),
   facts: (env.FACTS || 'true') !== 'false',
   factsEvery: Number(env.FACTS_EVERY ?? 6),
-  followup: (env.FOLLOWUP || 'true') !== 'false',
   react: (env.REACT || 'true') !== 'false', // “嗯嗯/哈哈”点表情回应，不调模型
   reactProb: Number(env.REACT_PROB ?? 0.7),
-  followupHours: (env.FOLLOWUP_HOURS || '9-22').split('-').map(Number), // 回访只在这个时段
-  followupCheckMs: Number(env.FOLLOWUP_CHECK_MS ?? 120_000),
-  followupIdleSec: Number(env.FOLLOWUP_IDLE_SEC ?? 180), // 对方刚说完话这么久之内不回访，免得打断
-  greetings: (env.GREETINGS || 'true') !== 'false', // 早安/晚安/久未联系的冒泡
   learnStyle: (env.LEARN_STYLE || 'true') !== 'false', // 学对方的口头禅/说话习惯（跟长期事实一起提炼，不多花调用）
   stealStickers: (env.STEAL_STICKERS || 'true') !== 'false', // 对方发的表情包，觉得好玩就收进自己的表情库
   stealMax: Number(env.STEAL_MAX ?? 40), // 每种情绪最多留几张收来的
@@ -122,18 +114,9 @@ export const cfg = {
   rhythm: (env.RHYTHM || 'true') !== 'false', // 记得对方几点睡几点起，晚睡早起会注意到
   curious: (env.CURIOUS || 'true') !== 'false', // 对对方还不了解的地方，找机会问一句
   curiousProb: Number(env.CURIOUS_PROB ?? 0.3), // 每轮聊天有多大概率提醒她（一天最多一次）
-  pokeSelf: (env.POKE_SELF || 'true') !== 'false', // 偶尔主动戳对方一下
-  pokeSelfProb: Number(env.POKE_SELF_PROB ?? 0.04), // 每次检查戳的概率（10 分钟看一次，约一天一次）
-  pokeSelfIdleMin: Number(env.POKE_SELF_IDLE_MIN ?? 90), // 对方多久没动静才戳
-  pokeSelfCheckMs: Number(env.POKE_SELF_CHECK_MS ?? 600_000),
   autonomyHours: (env.AUTONOMY_HOURS || '10-23').split('-').map(Number), // 自己找事做的时段
   autonomyRollWindowMin: Number(env.AUTONOMY_ROLL_WINDOW_MIN ?? 45), // 每小时在前多少分钟里随机掷骰子
   autonomyCheckMs: Number(env.AUTONOMY_CHECK_MS ?? 300_000),
-  chase: (env.CHASE || 'true') !== 'false', // 她问了一句、对方半天没回：偶尔追一句“人呢”
-  chaseProb: Number(env.CHASE_PROB ?? 0.4),
-  chaseMinMin: Number(env.CHASE_MIN ?? 8), // 等多久（分钟）才追：在 CHASE_MIN ~ CHASE_MAX 之间随机
-  chaseMaxMin: Number(env.CHASE_MAX ?? 25),
-  chaseCheckMs: Number(env.CHASE_CHECK_MS ?? 30_000),
   recall: (env.RECALL || 'true') !== 'false', // 对方撤回：没回的那条就不回了；熟人偶尔调侃一句
   recallTeaseProb: Number(env.RECALL_TEASE_PROB ?? 0.5),
   sleepDrift: (env.SLEEP_DRIFT || 'false') === 'true', // 作息被带偏：电脑的主人最近老熬夜 / 早睡，她的睡觉时段跟着挪
@@ -147,12 +130,8 @@ export const cfg = {
   // 现场照：问她在干嘛时，可能发一张“现在的她”（data/scene/bg 房间背景 × data/scene/pose 动作）
   photo: (env.PHOTO || 'false') === 'true',
   photoMaxDay: Number(env.PHOTO_MAX_DAY ?? 5),
-  // 每周一封信：每周某天晚上给 PROACTIVE_QQ 写一封信，信纸用百炼通义万相画（要 DASHSCOPE_API_KEY，没有就用素纸）
-  letter: (env.LETTER || 'false') === 'true',
-  letterWeekday: Number(env.LETTER_WEEKDAY ?? 0), // 0 = 周日
-  letterHour: Number(env.LETTER_HOUR ?? 21),
+  // 百炼画图用哪个模型：信纸（每周一封信在 proactive 插件里）、收到的礼物都用它
   letterModel: env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
-  letterCheckMs: Number(env.LETTER_CHECK_MS ?? 600_000),
   // 旅行明信片：隔几周的周末她在自己的小世界里出去玩一趟（周五定去哪），周日下午给 PROACTIVE_QQ 寄一张明信片（正面百炼画当地风景）
   postcard: (env.POSTCARD || 'false') === 'true',
   postcardEveryWeeks: Number(env.POSTCARD_EVERY_WEEKS ?? 3),
