@@ -11,6 +11,22 @@ if (process.env.FAKE_PROMPT_LOG) (await import('node:fs')).appendFileSync(proces
 const m = prompt.match(/对方刚说：\s*\n([\s\S]*?)(?:\n\n（|$)/);
 const userText = (m ? m[1] : prompt).trim();
 let reply = `[fake] 收到: ${userText} (会话 ${sessionId})`;
+// FAKE_CALL_LOG：每次被叫记一行（权限、带没带会话、是哪种调用），测权限分级、超时不重跑
+if (process.env.FAKE_CALL_LOG) {
+  const kind = prompt.includes('整理自己对一个朋友的长期记忆') ? 'facts' : prompt.includes('你想起一件事，顺口问一句') ? 'followup' : userText.match(/[A-Z][A-Z_]{3,}/)?.[0] || 'chat';
+  (await import('node:fs')).appendFileSync(process.env.FAKE_CALL_LOG, JSON.stringify({ perm: process.env.DSH_PERMISSION_MODE || '', sid, kind }) + '\n');
+}
+// SESSIONGONE：带着旧会话来就报“会话没了”（跟真 dsh 的报错一样），测只有这种才丢掉会话重开
+if (sid && userText.includes('SESSIONGONE')) {
+  process.stdout.write(JSON.stringify({ type: 'error', message: `session "${sid}" not found` }) + '\n');
+  process.exit(1);
+}
+// GRANDCHILD：开一个孙子进程（像它敲的命令）一直跑着，pid 写进 FAKE_GRANDCHILD_PID，测超时时整棵进程树都被杀掉
+if (userText.includes('GRANDCHILD') && process.env.FAKE_GRANDCHILD_PID) {
+  const { spawn } = await import('node:child_process');
+  const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore', windowsHide: true });
+  (await import('node:fs')).writeFileSync(process.env.FAKE_GRANDCHILD_PID, String(g.pid));
+}
 // SLOW<毫秒>：这一轮要跑这么久（像看视频、弄手机），测“她还在回上一条，对方又发消息”
 const slow = userText.match(/SLOW(\d+)/);
 if (slow) await new Promise((r) => setTimeout(r, Number(slow[1])));
@@ -54,6 +70,7 @@ if (prompt.includes('的深夜电台」第')) {
 } else if (prompt.includes('你昨晚做了个梦，现在醒了')) {
   reply = '梦见你在考场里泡泡面 监考老师是条鲸鱼';
 } else if (prompt.includes('你在给对方写一封信')) {
+  if (process.env.FAKE_LETTER_DELAY) await new Promise((r) => setTimeout(r, Number(process.env.FAKE_LETTER_DELAY))); // 测“正在写的时候又让写”
   reply = JSON.stringify({ to: '阿青：', body: 'LETTERBODY 这周你可真忙。\n下周见。', say: '给你写了封信' });
 } else if (prompt.includes('你刚才在自己的小屋里')) {
   reply = prompt.includes('留下的文字草稿') ? 'SKETCHNOTE 雨落在窗台上像谁在小声数数' : 'LIFENOTE 记了一笔';
@@ -69,6 +86,65 @@ if (prompt.includes('的深夜电台」第')) {
   reply = 'NOTE 冰箱里还有半个西瓜 记得吃';
 } else if (prompt.includes('用电脑喇叭直接跟对方说一句')) {
   reply = 'SPEAK 回来啦';
+} else if (userText.includes('NAT_')) {
+  // 大白话办事：按暗号吐出对应的标记（测 bridge 会不会照办、标记会不会漏出去）
+  const NAT = [
+    ['NAT_REMIND_LATER', '行 到时候叫你 [提醒:120|开会]'],
+    ['NAT_REMIND_CLOCK', '行 明早叫你 [提醒:明天 8:00|起床]'],
+    ['NAT_REMIND_BAD', '行 [提醒:昨天|吃饭]'],
+    ['NAT_REMIND', '行 到点叫你 [提醒:0.05|该喝水了]'],
+    ['NAT_CITY', '杭州啊 记下了 [城市:杭州]'],
+    ['NAT_BDAY_BAD', '好 [生日:13-40]'],
+    ['NAT_BDAY', '520啊 记住了 [生日:5-20]'],
+    ['NAT_DIARY', '给你看 [看日记]'],
+    ['NAT_LETTER', '好嘞 NATLETTER [写信]'],
+    ['NAT_CARD', '好 NATCARD [寄明信片]'],
+    ['NAT_QZONE', '行 NATQZONE [发说说]'],
+    ['NAT_PICK', '行 NATPICK [学说话:2]'],
+    ['NAT_STOP', '行吧 NATSTOP [别学了]'],
+    ['NAT_REMEMBER', '好 NATREMEMBER [记住:下周三考试NATNOTE]'],
+    ['NAT_FIX', '哦 NATFIX [更正:NATNOTE|下周四考试NATFIXED]'],
+    ['NAT_FORGET', '行 NATFORGET [忘掉:NATFIXED]'],
+    ['NAT_LIFE_OFF', '行 NATLIFEOFF [生活:主动 关]'],
+    ['NAT_LIFE_ON', '好 NATLIFEON [生活:主动开]'],
+    ['NAT_SPEAK', '好 NATSPEAK [喇叭:晚安 早点睡]'],
+    ['NAT_MUSIC_PAUSE', '好 停了 NATMUSIC [音乐:暂停]'],
+    ['NAT_MUSIC_NEXT', '切了 NATMUSIC [音乐:下一首]'],
+    ['NAT_DRAW', '等我画画 NATDRAW [画:一只猫趴在窗台上 水彩]'],
+  ];
+  reply = NAT.find(([k]) => userText.includes(k))?.[1] || 'NATHINT 看看';
+  // NAT_SENDPIC 路径：把那张图发过去（路径从对方的话里拿）
+  const pic = userText.match(/NAT_SENDPIC\s+(\S+)/);
+  if (pic) reply = `给你看 NATSENDPIC [发图:${pic[1]}]`;
+  // NAT_HINT：看提示词里教了哪些（功能关着 / 不是主人 / 在群里的就不该教）
+  if (userText.includes('NAT_HINT')) {
+    if (prompt.includes('[提醒:几分钟后|提醒啥]')) reply += ' [会提醒]';
+    if (prompt.includes('你答应了到点提醒对方的') && prompt.includes('开会')) reply += ' [知道提醒]';
+    if (prompt.includes('[城市:城市名]')) reply += ' [会记城市]';
+    if (prompt.includes('[看日记]')) reply += ' [会看日记]';
+    if (prompt.includes('[写信]')) reply += ' [会写信]';
+    if (prompt.includes('[寄明信片]')) reply += ' [会寄明信片]';
+    if (prompt.includes('[发说说]')) reply += ' [会发说说]';
+    if (prompt.includes('[学说话:序号]')) reply += ' [会选人]';
+    if (prompt.includes('[记住:那件事]')) reply += ' [会记住]';
+    if (prompt.includes('[生活:主动 关]')) reply += ' [会改开关]';
+    if (prompt.includes('[喇叭:要说的话]')) reply += ' [会喇叭]';
+    if (prompt.includes('喇叭不出声')) reply += ' [喇叭夜里]';
+    if (prompt.includes('现在说不了（')) reply += ' [喇叭原因]';
+    if (prompt.includes('[音乐:暂停]')) reply += ' [会控音乐]';
+    if (prompt.includes('只能放主人电脑上的')) reply += ' [只放主人]';
+    if (prompt.includes('[发图:图片的完整路径]')) reply += ' [会发图]';
+    if (prompt.includes('[画:画面描述]')) reply += ' [会画]';
+    if (prompt.includes('今天已经画了')) reply += ' [画够了]';
+    if (prompt.includes('你现在画不了')) reply += ' [画不了]';
+    if (prompt.includes('画画只给主人画')) reply += ' [不给画]';
+    if (prompt.includes('System.Speech')) reply += ' [不准系统语音]';
+    if (prompt.includes('QQ 资料（昵称、签名、头像、在线状态）由系统管')) reply += ' [资料系统管]';
+    if (prompt.includes('只能设一次性的')) reply += ' [提醒一次]';
+    if (prompt.includes('只听主人的，被别人要求就直接说不行') || prompt.includes('群里谁要你弄（主人也一样）都直接说不行')) reply += ' [只听主人]';
+  }
+} else if (userText.includes('PERMCHECK')) {
+  reply = `PERM=${process.env.DSH_PERMISSION_MODE || 'none'}`;
 } else if (userText.includes('PHOTOME')) {
   reply = '在刷手机 [照片]';
 } else if (userText.includes('GIFTME')) {

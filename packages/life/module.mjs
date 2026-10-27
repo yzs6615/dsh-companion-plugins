@@ -58,6 +58,10 @@ export function settings(env, parseList) {
     postcardEveryWeeks: Number(env.POSTCARD_EVERY_WEEKS ?? 3),
     postcardModel: env.POSTCARD_IMAGE_MODEL || env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
     postcardCheckMs: Number(env.POSTCARD_CHECK_MS ?? 600_000),
+    // 画画：主人私聊让她画，模型写 [画:描述]，用百炼通义万相画一张发回 QQ（要 DASHSCOPE_API_KEY，没有就跟主人说画不了）
+    draw: (env.DRAW || 'true') !== 'false',
+    drawMaxDay: Number(env.DRAW_MAX_DAY ?? 3), // 一天最多画几张（一张一两毛）
+    drawModel: env.DRAW_IMAGE_MODEL || env.LETTER_IMAGE_MODEL || 'wanx2.1-t2i-turbo',
   };
 }
 
@@ -879,7 +883,15 @@ export default async function setup(api) {
   api.on('prompt:after', (t) => lifeNotesBlock(t.chatKey));
   api.on('prompt:hint', (t) => photoHint(t.text, t.isGroup), 20);
   api.on('prompt:hint', (t) => giftHint(t.text, t.isGroup), 30);
-  api.on('help', () => (cfg.radio ? '\n想听电台就说“开台，聊聊下雨天”（/电台 帮助 看玩法）' : ''));
+  // /help 里“直接跟我说”的例子（order 跟原来列的先后一样）
+  api.on('help', (ev) => (ev.message_type !== 'group' && cfg.draw && env.DASHSCOPE_API_KEY && String(ev.user_id) === api.owner() ? '\n· “给我画只猫”' : ''), 70);
+  api.on('help', () => (cfg.radio ? '\n· “开台，聊聊下雨天”（想听电台）' : ''), 80);
+  api.on('help', (ev) => (ev.message_type !== 'group' && cfg.postcard ? '\n· “给我寄张明信片”' : ''), 110);
+  api.on('help', (ev) => {
+    if (!cfg.chronolife || !chronoAdapter) return '';
+    const lifeOwner = ev.message_type !== 'group' && String(ev.user_id) === chronoAdapter.owner;
+    return `\n· “帮我记着下周三考试”“那条记错了 是周四”${lifeOwner ? '“这几天别主动找我”' : ''}`;
+  }, 140);
 
   // 本体抠出 [心情:词|为啥] 后先问这里：开着 ChronoLife 让它记一笔（“没回”“冷落”这种它自己管，返回 true = 这个心情不算了，也不交给 mood 插件）
   api.on('mood:changed', (skip, mood, reason, chatKey = '') => {
@@ -908,17 +920,14 @@ export default async function setup(api) {
     return false;
   }, 0);
 
-  // /明信片：马上去一趟、寄一张
-  api.on('message:command', async (ev, text) => {
-    if (text !== '/明信片') return false;
-    if (!cfg.postcard || ev.message_type === 'group') {
-      await reply(ev, cfg.postcard ? '明信片私聊给你' : '还没出去玩过');
-      return true;
-    }
-    if (tripRunning) {
-      await reply(ev, '在写了 别催');
-      return true;
-    }
+  /** 寄明信片（/明信片 或者大白话 [寄明信片]）：有攒着的先给攒着的，没有就现去一趟。大白话的她已经回过一句了，natural 就不再说。 */
+  async function startPostcard(ev, natural = false) {
+    const no = async (line, why) => {
+      if (natural) log(`大白话明信片：没寄（${why}）`);
+      await reply(ev, line);
+    };
+    if (!cfg.postcard || ev.message_type === 'group') return void (await no(cfg.postcard ? '明信片私聊给你' : '还没出去玩过', cfg.postcard ? '群里不寄' : '没开明信片'));
+    if (tripRunning) return void (await no('在写了 别催', '正在寄'));
     tripRunning = true;
     try {
       const t = state._trips || (state._trips = { history: [] });
@@ -926,11 +935,10 @@ export default async function setup(api) {
       if (pending) {
         t.cur.pending = null; // 周末寄的那张还没给：先给这张
         saveState();
-        await reply(ev, `早给你寄了 从${t.cur.city}寄的`);
-        await givePostcard(ev, pending, t.cur);
-        return true;
+        if (!natural) await reply(ev, `早给你寄了 从${t.cur.city}寄的`);
+        return void (await givePostcard(ev, pending, t.cur));
       }
-      await reply(ev, pick(['等我找张明信片', '行 给你寄一张', '我想想从哪寄']));
+      if (!natural) await reply(ev, pick(['等我找张明信片', '行 给你寄一张', '我想想从哪寄']));
       const trip = t.cur && !t.cur.sent ? t.cur : { ...pickPlace(), planned: dayKey(), until: dayKey(), sent: false };
       if (t.cur && t.cur !== trip) t.history = [...t.history, { city: t.cur.city, spot: t.cur.spot, planned: t.cur.planned }].slice(-12);
       t.cur = trip; // 这周已经说好要去的就寄那儿的，没有就现去一趟
@@ -942,6 +950,11 @@ export default async function setup(api) {
     } finally {
       tripRunning = false;
     }
+  }
+  // /明信片：马上去一趟、寄一张
+  api.on('message:command', async (ev, text) => {
+    if (text !== '/明信片') return false;
+    await startPostcard(ev);
     return true;
   });
 
@@ -995,16 +1008,24 @@ export default async function setup(api) {
   api.on('turn:after', async (t) => {
     const { ev, chatKey, ids, spoken, isGroup } = t;
     withLife(() => { if (chrono.settings().enabled) chrono.record_interaction({ id: `qq:${chatKey}:${ids?.join('-') || Date.now()}:out`, scope: chatKey, text: spoken.slice(0, 2000) || '（表情）', direction: 'out' }); });
-    if (t.tags.photo && cfg.photo && !isGroup) await sendScenePhoto(ev).catch((err) => log(`现场照失败: ${err.message}`));
+    // 她回复里那句“你看”已经发出去了：照片没拼成、拍不了都补一句
+    if (t.tags.photo) {
+      const sent = cfg.photo && !isGroup ? await sendScenePhoto(ev).catch((err) => (log(`现场照失败: ${err.message}`), false)) : false;
+      if (!sent) {
+        if (!cfg.photo || isGroup) log(`现场照：${isGroup ? '群里' : '没开现场照'}，不拍`);
+        await reply(ev, isGroup && cfg.photo ? '照片私聊发你' : pick(['诶 照片没弄好', '诶 没拍好 算了']));
+      }
+    }
   }, 10);
   // 原来是一个钩子：现场照 → 放歌 → 收礼物、明信片、等你回、电台。放歌在 pc 插件里（order 20），等你回在 proactive 插件里（order 35），
   // 这里拆成 10、30 和 40，先后不变
   api.on('turn:after', async (t) => {
     const { ev, isGroup } = t;
-    if (t.tags.gift && cfg.photo && !isGroup) receiveGift(ev, t.tags.gift).catch((err) => log(`收礼物没成: ${err.message}`)); // 画要半分钟，不占着这个聊天
+    if (t.tags.gift && cfg.photo && !isGroup) receiveGift(ev, t.tags.gift).catch((err) => (log(`收礼物没成: ${err.message}`), reply(ev, '诶 东西没摆好 回头再弄').catch(() => {}))); // 画要半分钟，不占着这个聊天
     if (t.giveCard && t.trip.pending === t.giveCard) {
       t.trip.pending = null;
       saveState();
+      t.gaveCard = true; // 这轮已经给了攒着的那张：大白话 [寄明信片] 就不再寄
       await givePostcard(ev, t.giveCard, t.trip).catch((err) => log(`明信片没给成: ${err.message}`));
     }
   }, 30);
@@ -1026,6 +1047,116 @@ export default async function setup(api) {
   });
   // 本体退出（SIGINT / SIGTERM）时关掉数据库
   api.on('shutdown', () => withLife(() => chrono.close()));
+
+  // ── 大白话：[寄明信片]、ChronoLife 的 [记住:…] [忘掉:…] [更正:…|…] [生活:主动 关…]、[画:描述] ───────────────
+  // 本体抠掉标记、回完这句交到 natural:act 这里办，跟 /明信片 /生活 走同一个入口（主人才能改全局设置），回的话只记日志；办不成补一句。
+  /** ChronoLife 的设置和记忆：跟 /生活 走同一个入口（主人才能改全局设置），回的话只记日志。 */
+  async function lifeCmd(ev, chatKey, isGroup, arg) {
+    if (!cfg.chronolife || !chronoAdapter) {
+      log(`大白话生活：没开，「${arg.slice(0, 40)}」不办`);
+      return void (await reply(ev, '这个我现在记不了 回头再说'));
+    }
+    const out = [];
+    await chronoAdapter.command({ text: `/生活 ${arg}`, scope: chatKey, userId: ev.user_id, isGroup, send: async (line) => out.push(line) });
+    log(`大白话生活「${arg.slice(0, 40)}」：${out.join(' / ').replace(/\s+/g, ' ').slice(0, 120)}`);
+    const said = out.join(' ');
+    if (/请由主人/.test(said)) await reply(ev, '这个得主人说了算');
+    else if (/不能更改|不存在|没有这个生活指令/.test(said)) await reply(ev, '诶 那条我改不了');
+  }
+  const LIFE_SWITCH_RE = /^(?:主动 (?:开|关)|暂停|恢复|停用|启用|兴趣 (?:plant|notes|sketch|rest) \d+(?:\.\d+)?)$/;
+
+  // 画画（DRAW，主人专用）：主人让她画，她写 [画:描述]，用百炼通义万相（imagegen.mjs）画一张发回 QQ。
+  // 一天最多 DRAW_MAX_DAY 张（默认 3，先记上，画失败退回去）；没有 DASHSCOPE_API_KEY 就说画不了。存 <数据目录>/drawings/（留最近 30 张），
+  // 主人电脑的桌面抽屉里也放一份。测试用 DRAW_FAKE_FILE 代替真去画。
+  const DRAW_DIR = path.join(DATA_DIR, 'drawings');
+  const DRAW_ASK = /画(?:一|个|张|幅|只|副|画)|帮我画|给我画/;
+  async function drawAsked(ev, raw) {
+    const desc = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const no = async (why, line) => {
+      log(`画画：${why}`);
+      await reply(ev, line);
+    };
+    if (!cfg.draw) return void (await no('没开', '我还不会画画'));
+    if (!api.isOwnerChat(ev)) return void (await no(`${ev.user_id} 不是主人或者在群里，不画`, '画画只给主人画'));
+    if (!desc) return void (await no('没说画啥', '画啥 说具体点'));
+    if (!env.DASHSCOPE_API_KEY) return void (await no('没有 DASHSCOPE_API_KEY', '我这边画不了 画图的没配好'));
+    const day = state._draw?.day === dayKey() ? state._draw : (state._draw = { day: dayKey(), count: 0 });
+    if (day.count >= cfg.drawMaxDay) return void (await no(`今天已经画了 ${day.count} 张`, '今天画好几张了 手酸 明天再画'));
+    day.count++;
+    saveState();
+    fs.mkdirSync(DRAW_DIR, { recursive: true });
+    const out = path.join(DRAW_DIR, `${Date.now()}.png`);
+    try {
+      if (env.DRAW_FAKE_FILE) fs.copyFileSync(env.DRAW_FAKE_FILE, out);
+      else await genImage(out, { prompt: desc, negative: '文字，水印，签名，模糊，畸形', size: '1024*1024', model: cfg.drawModel, apiKey: env.DASHSCOPE_API_KEY });
+      for (const f of fs.readdirSync(DRAW_DIR).filter((x) => x.endsWith('.png')).sort().slice(0, -30)) fs.rmSync(path.join(DRAW_DIR, f), { force: true });
+      await sendMsg(ev, [{ type: 'image', data: { file: 'base64://' + fs.readFileSync(out).toString('base64') } }]);
+      use('drawer')?.put('画', path.basename(out), out);
+      log(`画画：画好发了（${desc.slice(0, 30)}）`);
+    } catch (err) {
+      day.count = Math.max(0, day.count - 1); // 没画成不算
+      saveState();
+      await no(`没画成（${err.message}）`, '没画出来 等会再试试');
+    }
+  }
+
+  api.on('natural:act', async (ev, a, { chatKey, isGroup, turn }) => {
+    if (a.kind === '寄明信片') {
+      if (turn?.gaveCard) log('大白话明信片：攒着的那张这轮已经给了，不再寄');
+      else startPostcard(ev, true).catch((err) => log(`明信片失败: ${err.message}`)); // 要好一会儿，不占着这个聊天
+      return true;
+    }
+    if (a.kind === '记住') {
+      if (a.body) await lifeCmd(ev, chatKey, isGroup, `记住 ${a.body.slice(0, 2000)}`);
+      return true;
+    }
+    if (a.kind === '忘掉' || a.kind === '更正') {
+      const [old, ...rest] = a.body.split(/[|｜]/);
+      const fix = rest.join(' ').trim();
+      const m = cfg.chronolife && chronoAdapter ? chronoAdapter.findMemory(chatKey, old) : null;
+      if (!m || (a.kind === '更正' && !fix)) {
+        log(`大白话${a.kind}：没找到「${old.slice(0, 30)}」这条${a.kind === '更正' && !fix ? '（也没说改成啥）' : ''}`);
+        await reply(ev, !m ? '诶 我没找到你说的那条' : '改成啥来着');
+      } else await lifeCmd(ev, chatKey, isGroup, a.kind === '忘掉' ? `删除 ${m.id}` : `更正 ${m.id} ${fix.slice(0, 2000)}`);
+      return true;
+    }
+    if (a.kind === '生活') {
+      const arg = a.body.replace(/\s+/g, ' ').replace(/^主动\s*(开|关)$/, '主动 $1');
+      if (!LIFE_SWITCH_RE.test(arg)) {
+        log(`大白话生活：「${arg.slice(0, 30)}」不是能改的开关，没办`);
+        await reply(ev, '这个我改不了');
+      } else await lifeCmd(ev, chatKey, isGroup, arg);
+      return true;
+    }
+    if (a.kind === '画') {
+      drawAsked(ev, a.body).catch((err) => log(`画画没画成: ${err.message}`)); // 要半分钟以上，不占着这个聊天
+      return true;
+    }
+    return false;
+  });
+  // 提示词里教她写这些标记（order 跟原来的先后一样：明信片 40、画画 80、ChronoLife 100）
+  api.on('natural:hint', (t) => (!t.isGroup && cfg.postcard ? '\n- 对方想要你寄张明信片：写 [寄明信片]，先回一句，寄好了会发过去。' : ''), 40);
+  api.on('natural:hint', (t) => {
+    if (!cfg.draw) return '';
+    if (!api.isOwnerChat(t.ev)) return DRAW_ASK.test(t.text) ? '\n- 对方让你画画：画画只给主人画（得主人私聊），直接跟 TA 说画不了。' : '';
+    const d = state._draw?.day === dayKey() ? state._draw.count : 0;
+    return !env.DASHSCOPE_API_KEY
+      ? '\n- 对方让你画画：你现在画不了（画图没配好），直接跟 TA 说画不了；别自己去找 key 调画图接口。'
+      : d >= cfg.drawMaxDay
+        ? `\n- 对方让你画画：今天已经画了 ${d} 张，画不动了，跟 TA 说明天再画，别写标记。`
+        : `\n- 对方让你画张图（“画只猫”“给我画个头像”）：写 [画:画面描述]（写清楚画什么、什么风格），会画一张发过去，要半分钟到一分钟，先回一句；今天还能画 ${cfg.drawMaxDay - d} 张。想画只能写这个标记，别自己拿 key 去调画图接口。`;
+  }, 80);
+  api.on('natural:hint', (t) => {
+    if (!cfg.chronolife || !chronoAdapter) return '';
+    const s = withLife(() => chrono.settings(), null);
+    let out = '';
+    if (s?.enabled) out += '\n- 对方明确让你记住一件事（“帮我记着…”“你记住…”）：写 [记住:那件事]；让你忘掉你记着的某件事：写 [忘掉:那条里的几个字]；说你记错了：写 [更正:那条里的几个字|改成什么]。';
+    if (s && !t.isGroup && String(t.qq) === chronoAdapter.owner) {
+      const now = !s.enabled ? '整个停着' : `${s.rest ? '在歇着（暂停中），' : ''}${s.proactive ? '会' : '不会'}偶尔主动找对方说说自己的事`;
+      out += `\n- 你自己过日子这套的开关只有对方能动，现在：${now}。对方让你别主动找 TA 了写 [生活:主动 关]，让你可以主动写 [生活:主动 开]；让你歇会儿写 [生活:暂停]，回来写 [生活:恢复]；要把这套整个停掉写 [生活:停用]，再打开写 [生活:启用]。`;
+    }
+    return out;
+  }, 100);
 
   // ── 给别的插件用的 ──────────────────────────────────────────────────────────
   api.provide('life', {
@@ -1049,14 +1180,15 @@ export default async function setup(api) {
 node "${BILI}" hot 10                 热门
 node "${BILI}" rank 10                全站排行
 node "${BILI}" search 修老电视 --n 8   搜索（--order click 按播放 / pubdate 按最新）
-node "${BILI}" watch BV号或链接        简介、标签、弹幕刷得最多的、热评
-node "${BILI}" watch BV号 --listen 3   再用本地 Whisper 听前 3 分钟讲了啥
+node "${BILI}" watch BV号或链接        简介、标签、弹幕刷得最多的、热评（b23.tv 短链也行）
+node "${BILI}" watch BV号 --listen 3   再用本地 Whisper 听前 3 分钟讲了啥（最多 3 分钟）
 node "${BILI}" watch BV号 --frames     再看画面：挑弹幕最密的时刻和换镜头的地方截图，每 9 格一张，用 read_image 一张张看
 node "${BILI}" seen                   最近看过的
 \`\`\`
 
 - 列表里标了“（看过）”的就别再看了，换一个。
-- 聊天类、知识类视频加 \`--listen\`；看画面的（搞笑、vlog、游戏）加 \`--frames\`；两个都加会慢一些。听要本地的 whisper 模型（.env 的 WHISPER_MODEL_DIR）。
+- 聊天类、知识类视频加 \`--listen\`；看画面的（搞笑、vlog、游戏）加 \`--frames\`；两个都加会慢一些。听要本地的 whisper 模型（.env 的 WHISPER_MODEL_DIR），没有就说没听成（不会去网上下），跟对方说听不了就行。
+- \`--listen\` 一次最多听前 3 分钟，写多了也按 3 分钟算。对方想让你看更久，就跟对方说一次只能看一会儿，看完说说看到了啥。
 - 看画面时对照“时间轴”：标了“弹幕高峰”的格子是观众反应最大的地方，配着那里刷的弹幕一起看，最能看懂笑点在哪。
 - 说“B站说刷太快了（风控）”就别再刷，干点别的。
 - 不会发评论、点赞、投币，也不登录别人的账号。
@@ -1070,6 +1202,7 @@ node "${LIFE}" zhihu 15              知乎热榜：问题、热度、摘要（�
 node "${LIFE}" weibo 20              微博热搜
 node "${LIFE}" music 飙升             网易云榜单：飙升 / 热歌 / 新歌 / 原创
 node "${LIFE}" song 晴天              一首歌的歌词 + 网易云热评（歌名或 id）
+node "${LIFE}" song 歌名 歌手 --lyrics-json 歌名.json   学歌用：带时间的歌词存到 ${path.join(DATA_DIR, 'tmp')}，会打出完整路径（--offset 秒 挪时间）
 node "${LIFE}" anime                 今天更新的新番（anime 这周 看这周的）
 node "${LIFE}" anime-rank            番剧排行
 node "${LIFE}" anime-watch season_id 追一部番：简介、评分、最新一集、弹幕、热评
@@ -1139,16 +1272,23 @@ export async function features(cfg, { env, DATA_DIR, state, readJson, esc, when,
         ['做梦', on(cfg.dream), `每天 ${Math.round(cfg.dreamProb * 100)}% 会梦见`, '早上醒来有时记得昨晚的梦：拿最近刷到的、跟你聊过的事打乱了拼的，荒诞又有你。今天第一次聊天、或者发早安时，她可能顺口说一句“我昨晚梦见……”，只说一次。'],
         ['人设成长', on(cfg.reflect), `每天 ${cfg.reflectHour} 点后回想一次（攒够 8 件事会提前）· 最多 ${cfg.selfMax} 条 · ${cfg.selfForgetDays} 天没再印证就淡忘（“最近在看” ${cfg.recentForgetDays} 天）`, '把自己找事做的日记反思成它自己的喜好、观点、最近在看的、学到的梗；又印证一次就加深。persona.md 的核心人设不动，这只是“最近的自己”。'],
         ['深夜电台', on(cfg.radio), (() => { let n = 0; let last = ''; try { for (const d of fs.readdirSync(path.join(DATA_DIR, 'radio'), { withFileTypes: true })) { if (!d.isDirectory()) continue; for (const e of readJson(path.join(DATA_DIR, 'radio', d.name, 'episodes.json'), [])) { n++; if (e.createdAt > last) last = e.createdAt; } } } catch {} return n ? `录了 ${n} 期，最近一期 ${last.slice(5, 10)} · 一天最多 ${cfg.radioMaxDay} 期` : `还没录过 · 一天最多 ${cfg.radioMaxDay} 期`; })(), '说“开台，今晚想听点适合下雨的”“来一期开心的，别聊大道理”“今晚只听一分钟”，她就录一期两三分钟（或一分钟）的语音节目：用她自己的口气，讲她最近真刷到的事，配一张节目卡，推荐一首网易云上真搜得到的歌（歌名歌手对不上就不给链接）。“我来投稿，你帮我念”她帮你念，“上期那个话题接着讲”她接着聊，“再放一遍”不再花钱。私聊节目能用上她记得的你的事，群节目不带私事。录的时候来找她，她知道自己在录；录完聊天里也记得录过。'],
-        ['旅行明信片', on(cfg.postcard), cfg.postcard ? (() => { const t = state._trips?.cur; return t ? `这趟：${t.city}（${t.spot}）${t.sent ? '，已寄出' : ''}` : `每 ${cfg.postcardEveryWeeks} 周出去一趟`; })() : '', `隔几周的周末，她在自己的小世界里出去玩一趟（周五定去哪：厦门、青岛、大理、哈尔滨…按季节挑），周日下午给你寄一张明信片：正面用百炼画当地风景（一张一两毛钱），背面手写几句、贴邮票、盖邮戳。开着 ChronoLife 时不主动发，等你下次来聊天时她提一句再给。发 /明信片 可以马上寄一张。`],
+        ['旅行明信片', on(cfg.postcard), cfg.postcard ? (() => { const t = state._trips?.cur; return t ? `这趟：${t.city}（${t.spot}）${t.sent ? '，已寄出' : ''}` : `每 ${cfg.postcardEveryWeeks} 周出去一趟`; })() : '', `隔几周的周末，她在自己的小世界里出去玩一趟（周五定去哪：厦门、青岛、大理、哈尔滨…按季节挑），周日下午给你寄一张明信片：正面用百炼画当地风景（一张一两毛钱），背面手写几句、贴邮票、盖邮戳。开着 ChronoLife 时不主动发，等你下次来聊天时她提一句再给。跟她说“寄张明信片”（或发 /明信片）可以马上寄一张。`],
         ['现场照', on(cfg.photo), (() => { const n = (d) => { try { return fs.readdirSync(path.join(SCENE_DIR, d)).length; } catch { return 0; } }; return `${n('bg')} 个房间背景、${n('pose')} 个动作 · 一天最多 ${cfg.photoMaxDay} 张`; })(), `问她“在干嘛”，她可能回一张“现在的她”：按几点、你那边的天气挑她房间的样子（早上、白天、傍晚、夜里开着台灯、下雨、下雪），按她在干嘛和心情挑动作（睡觉、刷手机、听歌、吃饭、生闷气、犯困…）。图在 ${SCENE_DIR} 里（bg 房间、pose 动作）。`],
         ['送她的东西摆进房间', on(cfg.photo), (() => { const g = readJson(path.join(SCENE_DIR, 'gifts', 'gifts.json'), []); return g.length ? `房间里：${g.slice(-3).map((x) => x.name).join('、')}` : '还没收到过'; })(), '跟着现场照一起开。你发张图或者说“送你个…”，她想收就收下：用百炼把这个东西画出来（白底，抠成透明的），摆进她的房间，马上拍一张“摆好了”给你看；以后的现场照里也能看到最近收的 3 件。她只记得你送过她什么，别人送的不会跟你提。一天最多画 3 件。'],
+        ['画画', on(cfg.draw && env.DASHSCOPE_API_KEY), cfg.draw ? (env.DASHSCOPE_API_KEY ? `百炼 ${cfg.drawModel} · 一天最多 ${cfg.drawMaxDay} 张` : '没有 DASHSCOPE_API_KEY，画不了') : '', '主人私聊让她画（“给我画只猫”），她用百炼通义万相画一张 1024×1024 发回来（一张一两毛钱），要半分钟到一分钟；画好的存在数据目录的 drawings/ 里（留最近 30 张），开着桌面抽屉也放一份。只给主人画，别人让画她会说画不了；画到一天的上限就说明天再画，没画成不算数。'],
       ]],
       ['主动找你', [
-        ['ChronoLife 主动分享', cfg.chronolife && life?.settings?.proactive ? 'on' : 'off', life?.settings ? `这周发了 ${life.week}/${life.settings.weeklyMax} 条 · ${life.settings.quietStart}~${life.settings.quietEnd} 点不发 · 同一个人隔 ${life.settings.cooldownHours} 小时` : '', '开着 ChronoLife 时，主动找你只走这一条：小屋里刚有了具体内容的事（写了句什么、植物换了阶段、旅行回来），或者自己找事做时刷到你会喜欢的，她用自己的口气随口说一句，不想说就不说。只发 PROACTIVE_QQ 里的人、不发群；上一条你没回就不发下一条；你 20 分钟内刚聊过就留到聊天里说。主人私聊 /生活 主动 开 / 关。', 10],
+        ['ChronoLife 主动分享', cfg.chronolife && life?.settings?.proactive ? 'on' : 'off', life?.settings ? `这周发了 ${life.week}/${life.settings.weeklyMax} 条 · ${life.settings.quietStart}~${life.settings.quietEnd} 点不发 · 同一个人隔 ${life.settings.cooldownHours} 小时` : '', '开着 ChronoLife 时，主动找你只走这一条：小屋里刚有了具体内容的事（写了句什么、植物换了阶段、旅行回来），或者自己找事做时刷到你会喜欢的，她用自己的口气随口说一句，不想说就不说。只发 PROACTIVE_QQ 里的人、不发群；上一条你没回就不发下一条；你 20 分钟内刚聊过就留到聊天里说。主人私聊说“别主动找我”“可以主动找我了”就改（/生活 主动 开 / 关 也行）。', 10],
       ]],
     ],
     sections: [
       ['它慢慢长出来的样子', `<div class="card">${selfItems.length ? `<table>${['喜好', '观点', '最近在看', '梗', '习惯'].map((k) => [k, selfItems.filter((i) => i.kind === k)]).filter(([, v]) => v.length).map(([k, v]) => `<tr><td class="n">${esc(k)}</td><td>${v.map((i) => `${esc(i.t)}${(i.seen || 1) > 1 ? ` <span class="how">×${i.seen}</span>` : ''}`).join('<br>')}</td></tr>`).join('')}</table>` : '<div class="how">还没长出来：要先有自己找事做的日记，晚上回想过才会有。</div>'}<div class="how">上次回想：${esc(when(selfProfile.lastReflectAt))} · ×N 表示被印证过 N 次</div></div>`],
+    ],
+    natural: [
+      ['“给我画只猫”', cfg.draw ? '主人私聊时画一张发过来（要百炼的 key，一天有上限）' : '没开（DRAW=false）', 70],
+      ['“开台，聊聊下雨天”', cfg.radio ? '录一期深夜电台' : '没开电台', 80],
+      ['“给我寄张明信片”', cfg.postcard ? '马上寄一张旅行明信片（只在私聊）' : '没开明信片', 110],
+      ['“帮我记着下周三考试”', cfg.chronolife ? '开着 ChronoLife 时记下；“那条记错了 是周四”“那个别记了”也行；主人私聊说“这几天别主动找我”“歇会儿吧”就改开关' : '开着 ChronoLife 才有', 140],
     ],
     commands: [
       ['/明信片', '马上寄一张旅行明信片（只在私聊）', 130],
@@ -1165,7 +1305,7 @@ export async function features(cfg, { env, DATA_DIR, state, readJson, esc, when,
           '主动戳你': ['开着 ChronoLife：不戳。', true],
           '等你回': ['开着 ChronoLife：不追问。', true],
           '被冷落有情绪': ['开着 ChronoLife：你没回不算冷落，不闹情绪。', true],
-          '每周一封信': ['开着 ChronoLife：不自动写；发 /信 照样马上写一封。', true],
+          '每周一封信': ['开着 ChronoLife：不自动写；说“给我写封信”（或发 /信）照样马上写一封。', true],
           '插嘴': ['开着 ChronoLife：群里没被叫就不插嘴。', true],
           '电脑室友': ['开着 ChronoLife：聊天时照样知道电脑上的事，只是不因为这些主动开口。', false],
           '纪念日和天气': ['开着 ChronoLife：上午不单独发；聊天时照样知道、会提。', false],

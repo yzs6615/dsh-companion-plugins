@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { speak } from './tts.mjs';
 import { pickByMeaning, readIndex, writeIndex } from './stickers.mjs';
+import { learnJobsTick } from './sing/learn.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -196,11 +197,15 @@ export default function setup(api) {
       p.misses = (p.misses || 0) + 1;
       return false; // 不是在选人：当普通聊天（会看到转发的内容）
     }
+    await learnPicked(ev, chatKey, p, who);
+    return true;
+  }
+  /** 选好了人就去学。大白话选的（[学说话:2]）她自己已经回过一句了，quiet 就不再说“我琢磨琢磨”。 */
+  async function learnPicked(ev, chatKey, p, who, quiet = false) {
     pendingForward.delete(chatKey);
     const texts = p.lines.filter((l) => (l.uid || l.name) === who.key).map((l) => l.text);
-    await reply(ev, pick(['行 我琢磨琢磨', '好 我研究下 TA 怎么说话', '收到 我学学']));
+    if (!quiet) await reply(ev, pick(['行 我琢磨琢磨', '好 我研究下 TA 怎么说话', '收到 我学学']));
     learnStyle(ev, who, texts).catch((err) => log(`学说话失败: ${err.message}`));
-    return true;
   }
   /** 刚转发过来、还没选人的聊天记录：聊天时带上，对方问“这段在说啥”也能答。 */
   function forwardBlock(chatKey) {
@@ -255,14 +260,14 @@ export default function setup(api) {
     log(`学说话：开始学 ${who.name} 的说话方式（素材 ${merged.length} 条，习惯 ${traits.length} 条）`);
     await reply(ev, same ? '又多学了点 接着带' : '学到了 会慢慢被 TA 带跑偏的');
   }
-  async function stopMimic(ev) {
+  async function stopMimic(ev, quiet = false) {
     const a = readMimic().active;
     writeMimic({ active: null });
     try {
       fs.rmSync(MIMIC_SAMPLES, { recursive: true, force: true });
     } catch {}
     log(`学说话：停了${a ? `（${a.name}）` : ''}，素材已删`);
-    await reply(ev, a ? '行 不学了 记下来的也删了' : '本来就没在学');
+    if (!quiet) await reply(ev, a ? '行 不学了 记下来的也删了' : '本来就没在学'); // 大白话说的（[别学了]）她自己回过了
   }
 
   // 学某个人说话那段：主动消息（proactive）里也要带，给成服务
@@ -427,11 +432,18 @@ export default function setup(api) {
   async function sendSong(target, name, opts = {}) {
     const songs = readSongs();
     if (!songs.length) return 'none';
-    const song = findSong(songs, name);
+    // [唱歌:歌名/一句歌词] 点名唱哪一段；没写斜杠时，歌名后面多出来的字也当歌词
+    const [title, ...rest] = String(name || '').split(/[\/｜|]/);
+    const song = findSong(songs, title.trim());
     if (!song) return 'unknown';
     const key = `${target.message_type}:${target.group_id || target.user_id}`;
-    const pool = song.clips.length > 1 ? song.clips.filter((c) => `${song.title}/${c.file}` !== lastSung.get(key)) : song.clips;
-    const clip = pool[Math.floor(Math.random() * pool.length)];
+    const hint = rest.length ? rest.join(' ') : String(title).replace(song.title, '');
+    const clip =
+      pickClipByLyrics(song.clips, hint) ||
+      (() => {
+        const pool = song.clips.length > 1 ? song.clips.filter((c) => `${song.title}/${c.file}` !== lastSung.get(key)) : song.clips;
+        return pool[Math.floor(Math.random() * pool.length)];
+      })();
     try {
       const wait = Math.min(8000, (clip.sec || 20) * 150) - (opts.credit || 0);
       if (wait > 0) await sleep(wait * pace());
@@ -447,15 +459,39 @@ export default function setup(api) {
       return 'fail';
     }
   }
-  /** 提示词里告诉它会唱哪些歌。 */
+  /** 歌词里去掉“郭：”这种分声部的标记和标点，只留字。 */
+  const lyricText = (s) => String(s || '').replace(/(^|[，,\s])[^，,\s：:]{1,3}[：:]/g, '$1').replace(/[\s，,。.!！?？、~～"“”'‘’《》…-]/g, '');
+  /** 按一句歌词挑最像的那段：两个字两个字地比，对上最多的赢（Whisper 听写有错字也能对上）；一个都对不上返回 null。 */
+  function pickClipByLyrics(clips, hint) {
+    const h = lyricText(hint);
+    if (h.length < 2) return null;
+    const grams = new Set(Array.from({ length: h.length - 1 }, (_, i) => h.slice(i, i + 2)));
+    let best = null;
+    let bestScore = 0;
+    for (const c of clips) {
+      const t = lyricText(c.lyrics);
+      let score = 0;
+      for (const g of grams) if (t.includes(g)) score++;
+      if (score > bestScore) [best, bestScore] = [c, score];
+    }
+    return bestScore >= Math.min(2, grams.size) ? best : null;
+  }
+  /** 提示词里告诉它会唱哪些歌；一首学了好几段的，列出每段开头的歌词，好让它点名唱哪段。 */
   function songBlock() {
     if (!cfg.sing) return '';
     const songs = readSongs();
     if (!songs.length) return '';
-    const list = songs.map((s) => `${s.title}${s.artist ? `（${s.artist}）` : ''}`).join('、');
+    const head = (c) => String(c.lyrics || '').replace(/(^|[，,\s])[^，,\s：:]{1,3}[：:]/g, '$1').split(/[，,]/).filter(Boolean).slice(0, 2).join('，');
+    const list = songs
+      .map((s) => {
+        const name = `${s.title}${s.artist ? `（${s.artist}）` : ''}`;
+        const parts = s.clips.filter((c) => c.lyrics).map((c) => `「${head(c)}…」`);
+        return parts.length > 1 ? `${name}：会 ${parts.length} 段 ${parts.join(' ')}` : name;
+      })
+      .join('；');
     const left = (singDay.day === dayKey() ? cfg.singMaxDay - singDay.count : cfg.singMaxDay);
     return left > 0
-      ? `\n\n---\n你学会唱的歌：${list}。想唱就在回复里写 [唱歌:歌名]（随便唱一首就写 [唱歌]），会用你自己的嗓子唱一段发过去，可以先说一句再唱。对方让你唱、想哄人、心情特别好的时候可以唱，别动不动就唱。不在这里的歌就说还没学会，别硬唱。`
+      ? `\n\n---\n你学会唱的歌：${list}。想唱就在回复里写 [唱歌:歌名]（随便唱一首就写 [唱歌]），会用你自己的嗓子唱一段发过去，可以先说一句再唱。对方点名要听某一段，就写 [唱歌:歌名/那段里的一句歌词]，比如 [唱歌:${songs[0].title}/${head(songs[0].clips[songs[0].clips.length - 1]).split('，')[0].trim() || '一句歌词'}]；要的那段没学过就说还没学到那儿。对方让你唱、想哄人、心情特别好的时候可以唱，别动不动就唱。不在这里的歌就说还没学会，别硬唱。`
       : `\n\n---\n你今天已经唱了好几段了，嗓子累了，别再唱了；对方要听就说明天再唱。`;
   }
 
@@ -603,6 +639,67 @@ export default function setup(api) {
     }
     return false;
   });
+
+  // ── 大白话：合并转发后说“学第二个”，她写 [学说话:2]；说“别学了”，她写 [别学了] ─────────────────────
+  // 本体抠掉标记、回完这句交到 natural:act 这里办，跟选人、/别学了 走同一套；她自己回过一句了，不再说“我琢磨琢磨”。
+  api.on('natural:act', async (ev, a, { chatKey, isGroup }) => {
+    if (a.kind === '学说话') {
+      const p = isGroup || !cfg.mimic ? null : pendingForward.get(chatKey);
+      const fresh = p && Date.now() - p.at <= 15 * 60_000;
+      const who = fresh ? parsePick(a.body, p.speakers) : null;
+      if (!who) {
+        log(`大白话学说话：没选上「${a.body.slice(0, 20)}」（${p ? '对不上人' : '没有等着选人的转发'}）`);
+        await reply(ev, fresh ? '没对上是哪个 你说第几个？' : '你先把聊天记录转给我');
+      } else await learnPicked(ev, chatKey, p, who, true);
+      return true;
+    }
+    if (a.kind === '别学了') {
+      const p = pendingForward.get(chatKey);
+      if (p && Date.now() - p.at <= 15 * 60_000) {
+        pendingForward.delete(chatKey); // 还在等着选人：不学了
+        log('大白话学说话：转发的那段不学了');
+      } else await stopMimic(ev, true);
+      return true;
+    }
+    return false;
+  });
+  api.on('natural:hint', (t) => {
+    if (t.isGroup || !cfg.mimic) return '';
+    const p = pendingForward.get(t.chatKey);
+    const a = readMimic().active;
+    if (p && Date.now() - p.at <= 15 * 60_000) return `\n- 转给你的聊天记录里有：${p.speakers.map((s, i) => `${i + 1}. ${s.name}`).join('，')}。对方说要学里面谁说话：写 [学说话:序号]；说不学了：写 [别学了]。`;
+    if (a) return `\n- 对方问你在学谁说话：在学 ${a.name} 的，学了 ${Math.max(1, Math.round((Date.now() - a.startedAt) / 86400_000))} 天、大概 ${Math.round(mimicStrength(a) * 10)} 成了；对方让你别学了：写 [别学了]（学到的会删掉）。`;
+    return '\n- 对方想让你学谁说话：让 TA 把那人的聊天记录合并转发给你。';
+  }, 90);
+  // /help 里“直接跟我说”的例子
+  api.on('help', () => (cfg.sing && readSongs().length ? '\n· “唱首歌”“你会唱啥”' : '') + (cfg.voice ? '\n· “用语音说句晚安”' : ''), 30);
+  api.on('help', (ev) => (ev.message_type !== 'group' && cfg.mimic ? '\n· 把聊天记录合并转发给我，再说“学第二个人”；不想要了说“别学了”' : ''), 130);
+
+  // ── 学新歌：sing/learn.mjs start 只把任务记成排队，内核每 3 秒看一眼、由内核起后台进程（DSH 起的进程一轮结束会被收掉）──
+  if (cfg.sing) {
+    log('学歌: learn.mjs start 排队的任务由内核接手，在后台跑完');
+    api.every(3000, () => learnJobsTick(log), 3000);
+  }
+  // 模型的工具说明（进 AGENTS.md）：学歌只能用 learn.mjs
+  const LEARN = path.join(HERE, 'sing', 'learn.mjs');
+  api.on('agents', () => (cfg.sing ? `
+## 学新歌
+
+被叫去学一首歌：先用刷 B站 的 \`search 歌名\` 找个音质好的完整版（标了无损 / Hi-Res 的最好），再拿歌词（“刷别的”里的 \`song 歌名 歌手 --lyrics-json 歌名.json\`，会打出存好的完整路径；没装那个就不加 --lyrics），然后开学：
+
+\`\`\`
+node "${LEARN}" start --title 歌名 --artist 歌手 --bv BV号 --seg 104-134 --lyrics 上一步打出的路径   在后台学，马上返回
+node "${LEARN}" status 歌名                                                  学到哪一步了
+\`\`\`
+
+- 一段 30 秒要 5 分钟左右，比一轮聊天长得多。**只能用 learn.mjs**，别直接跑 \`sing/render.py\`，也别用后台 job 或者等 job：这一轮一结束，它们就会被一起杀掉，每次都死在“换嗓子”那一步。
+- \`--seg 起-止\`（秒）挑副歌，30 秒左右，可以写好几个 \`--seg\`。
+- 歌词只用 \`song … --lyrics-json\` 拿，别自己拼。时间按网易云原版算，B站 那版前奏长短不一样就重跑一次加 \`--offset 秒\`；没歌词就不加 \`--lyrics\`，照样能学。
+- B站 上搜不到这首歌（只有翻唱、片段也算），就跟对方说找不到，别去别的地方下。
+- 别 \`pip install\` / \`npm install -g\`，别装也别用 yt-dlp，别用别的目录的 Python 或 venv，别改插件的代码。临时脚本和临时文件只放 \`${path.join(DATA_DIR, 'tmp')}\`。learn.mjs 报错学不了，就把原因跟对方说，别自己另起炉灶。
+- start 完就跟对方说一句“在学了，过几分钟”，然后结束这一轮，别干等。对方再问就看 \`status\`。
+- 学好的歌会出现在“你学会唱的歌”里，到时候写 \`[唱歌:歌名]\`（点名唱哪段写 \`[唱歌:歌名/那段里的一句歌词]\`）。同一时间只能学一首。
+` : ''));
 }
 
 /**
@@ -631,10 +728,15 @@ export function features(cfg, { env, ROOT, DATA_DIR, readJson, on }) {
         ['表情包按意思挑', 'on', `${Object.keys(readJson(path.join(STICKER_DIR, 'index.json'), {})).length} 张有描述`, `每张表情图配了一句“画面：用法”的描述（node "${path.join(ROOT, 'scripts', 'sticker-index.mjs')}" 让模型看图写），她想表达“无语翻白眼”“笑到打滚”就挑最贴的那张；对不上就不硬发。新收的表情包会自己补描述。`],
         ['偷表情包', on(cfg.stealStickers), `每种情绪最多留 ${cfg.stealMax} 张收来的 · 发表情时一半机会用收来的`, '对方发的表情包（只认 QQ 标成表情的图，普通照片不收），它觉得好玩就按情绪收进自己的表情库，以后自己也用。'],
         ['学说话', on(cfg.learnStyle && cfg.facts), '和长期事实一起提炼，不多花模型调用', '从聊天里学对方的口头禅、语气词、爱用的梗，偶尔学着用（越熟越容易被带跑偏）。'],
-        ['学某个人说话', on(cfg.mimic), (() => { const m = readJson(path.join(DATA_DIR, 'mimic.json'), {}).active; if (!m) return '没在学谁：把一段聊天合并转发给它，回序号选人'; const k = Math.max(0.15, Math.min(1, cfg.mimicRampDays > 0 ? (Date.now() - m.startedAt) / 86400_000 / cfg.mimicRampDays : 1)); return `在学「${m.name}」· 大概 ${Math.round(k * 10)} 成（${cfg.mimicRampDays} 天学到位）· 习惯：${(m.traits || []).join('；')}`; })(), '合并转发聊天记录给它 → 选一个人 → 总结 TA 的说话习惯，按天数慢慢带进自己的语气；不冒充那个人、不搬原话里的私事。/学说话 看进度，/别学了 停掉并删掉素材。'],
+        ['学某个人说话', on(cfg.mimic), (() => { const m = readJson(path.join(DATA_DIR, 'mimic.json'), {}).active; if (!m) return '没在学谁：把一段聊天合并转发给它，回序号选人'; const k = Math.max(0.15, Math.min(1, cfg.mimicRampDays > 0 ? (Date.now() - m.startedAt) / 86400_000 / cfg.mimicRampDays : 1)); return `在学「${m.name}」· 大概 ${Math.round(k * 10)} 成（${cfg.mimicRampDays} 天学到位）· 习惯：${(m.traits || []).join('；')}`; })(), '合并转发聊天记录给它 → 选一个人 → 总结 TA 的说话习惯，按天数慢慢带进自己的语气；不冒充那个人、不搬原话里的私事。问她在学谁就知道进度，说“别学了”停掉并删掉素材（/学说话 /别学了 也行）。'],
         ['发语音', on(cfg.voice), cfg.voice ? `百炼 CosyVoice 复刻音色 · ${cfg.voiceModel} · ${cfg.voiceMaxChars} 字以内才念 · 一天最多 ${cfg.voiceMaxDay} 条${cfg.voiceCutMs ? ` · 句尾再剪 ${cfg.voiceCutMs}ms` : ''}` : '没开：.env 里要有 VOICE_ID 和 DASHSCOPE_API_KEY', '它觉得这句适合说出来（笑、吐槽、撒娇、晚安，或者你让它发语音）就用自己的声音发 QQ 语音；合成后自动去掉开头结尾的杂音。太长、发够了、合成失败都改成打字。语音能带语气：生气、难过、委屈、害怕、惊讶、嫌弃、困，她可以写 [语音:害怕] 自己点；没点就跟着有来由的心情走（你惹她生气、委屈、烦你，或者熬夜后犯困），没来由的心情不算；带语气的音量压一压，不会突然很大声。开心的语气试过跟生气听不出区别，没做。/说话 xxx 直接念给你听（不带心情）。'],
-        ['唱歌', on(cfg.sing), (() => { let songs = []; try { songs = fs.readdirSync(SONG_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => readJson(path.join(SONG_DIR, d.name, 'song.json'), null)).filter((m) => m && (m.clips || []).length); } catch {} return songs.length ? `会唱 ${songs.map((m) => `${m.title}（${m.clips.length} 段）`).join('、')} · 一天最多主动唱 ${cfg.singMaxDay} 段` : `还没有歌：用 ${path.join(HERE, 'sing', 'render.py')} 转一首`; })(), '用她自己的嗓子唱：提前把歌转好放进歌库（Seed-VC 唱歌模型用她的声音微调过，参考用她唱歌的片段），聊天时它想唱、或者你让它唱，就挑一段发 QQ 语音，不连着唱同一段。没学过的歌说还没学会；唱够了说嗓子累了。/唱歌 歌名 直接听，/歌单 看会哪些。'],
+        ['唱歌', on(cfg.sing), (() => { let songs = []; try { songs = fs.readdirSync(SONG_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => readJson(path.join(SONG_DIR, d.name, 'song.json'), null)).filter((m) => m && (m.clips || []).length); } catch {} return songs.length ? `会唱 ${songs.map((m) => `${m.title}（${m.clips.length} 段）`).join('、')} · 一天最多主动唱 ${cfg.singMaxDay} 段` : `还没有歌：用 ${path.join(HERE, 'sing', 'render.py')} 转一首`; })(), '用她自己的嗓子唱：提前把歌转好放进歌库（Seed-VC 唱歌模型用她的声音微调过，参考用她唱歌的片段），聊天时它想唱、或者你让它唱，就挑一段发 QQ 语音，不连着唱同一段。一首学了好几段的，提示词里列着每段开头的歌词，你点名“唱那句 xxx 那段”她就唱那段。没学过的歌说还没学会；唱够了说嗓子累了。/唱歌 歌名 直接听，/歌单 看会哪些。让她学新歌：她用 sing/learn.mjs 在后台学（B站 音轨 + 网易云歌词，一段 30 秒要 5 分钟左右，内核每 3 秒看一眼有没有排队的任务）。'],
       ]],
+    ],
+    natural: [
+      ['“唱首歌”“你会唱啥”', cfg.sing ? '用她的嗓子唱一段，点名哪首、哪句那段也行' : '没开唱歌', 30],
+      ['“用语音说句晚安”', cfg.voice ? '用她的声音念出来' : '没开语音', 35],
+      ['转发聊天记录 +“学第二个人”', cfg.mimic ? '学那个人的说话方式；问“你在学谁”她知道，说“别学了”就停掉并删掉素材' : '没开学说话', 130],
     ],
     commands: [
       ['/唱歌 第一天', '用她的嗓子唱一段（不写歌名就随便唱一首，不算每天的条数）', 50],

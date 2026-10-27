@@ -7,19 +7,22 @@
 
 | 插件 | 包名 | 有什么 |
 | --- | --- | --- |
-| [本体](packages/core/README.md) | `dsh-companion-core` | 连 QQ、私聊、人设、短期记忆、熟悉度、连发合并、打字节奏、附和点表情、引用、撤回、看懂图片视频和文件、提醒、白名单和权限 |
-| [说话的样子](packages/speech/README.md) | `dsh-companion-speech` | 表情包（按意思挑、偷对方的）、学对方说话、学某个人说话、发语音、唱歌 |
+| [本体](packages/core/README.md) | `dsh-companion-core` | 连 QQ、私聊、人设、短期记忆、熟悉度、连发合并、打字节奏、附和点表情、引用、撤回、看懂图片视频和文件、听 QQ 语音、提醒、发图、白名单和权限分级 |
+| [说话的样子](packages/speech/README.md) | `dsh-companion-speech` | 表情包（按意思挑、偷对方的）、学对方说话、学某个人说话、发语音、唱歌（点名哪段）、后台学新歌 |
 | [记得你](packages/memory/README.md) | `dsh-companion-memory` | 长期记住对方的事和到点回访的事、记得作息、对你好奇、纪念日和天气、每天写日记 |
 | [心情和作息](packages/mood/README.md) | `dsh-companion-mood` | 心情有来由、会延续；熬夜后犯困；作息被你带偏；主动找你没回会有点小情绪 |
-| [她自己的生活](packages/life/README.md) | `dsh-companion-life` | ChronoLife 小屋、自己找事做（刷 B站、知乎、微博，听歌、看番）、做梦、人设成长、深夜电台、旅行明信片、现场照、收礼物 |
+| [她自己的生活](packages/life/README.md) | `dsh-companion-life` | ChronoLife 小屋、自己找事做（刷 B站、知乎、微博，听歌、看番）、做梦、人设成长、深夜电台、旅行明信片、现场照、收礼物、画画 |
 | [主动找你](packages/proactive/README.md) | `dsh-companion-proactive` | 早安晚安、到点回访、主动戳你、等你回、每周一封信 |
-| [电脑上的她](packages/pc/README.md) | `dsh-companion-pc` | 电脑室友、喇叭说话、桌面便条、桌面抽屉、用 QQ 音乐放歌（只支持 Windows） |
+| [电脑上的她](packages/pc/README.md) | `dsh-companion-pc` | 电脑室友、喇叭说话、桌面便条、桌面抽屉、用 QQ 音乐放歌和控制音乐（只支持 Windows） |
 | [QQ 上的样子](packages/profile/README.md) | `dsh-companion-profile` | 在线状态和个签、自定义在线状态、心情头像、QQ 空间说说 |
 | [群聊](packages/group/README.md) | `dsh-companion-group` | 群白名单、叫名字唤醒、引用回复、偶尔插嘴、戳一戳（没装就不理群消息） |
-| [手机](packages/phone/README.md) | `dsh-companion-phone` | 用 adb 控制安卓手机、手机看门狗、看手机直播和电脑上的直播 |
+| [手机](packages/phone/README.md) | `dsh-companion-phone` | 用 adb 控制安卓手机（带不准打电话、发消息、删东西的红线）、手机看门狗、看手机直播和电脑上的直播 |
 
 会花钱、会打扰人、要额外准备东西的功能（主动找你、自己找事做、写信、明信片、现场照、电脑上的她、QQ 空间……）大多默认关着，
 在 `.env` 里打开才有；各插件的 README 里写了哪些默认关、要什么。
+
+以前要发命令的事都能直接跟她说：“半小时后提醒我喝水”“我在杭州”“给我写封信”“发条说说”“把聊天记录转给你，学第二个人”……
+她在回复里写个标记，本体抠掉后交给对应的插件去办，不会另外发“已设置”；办不成会补一句。原来的斜杠命令照样能用，`/help` 列出能直接说的例子。
 
 ## 安装
 
@@ -58,8 +61,9 @@ dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#speech
 
 怎么连 NapCat、白名单怎么写，见[本体的说明](packages/core/README.md)；每个插件的开关和默认值见各自的 README。
 
-**注意**：白名单里的人说的话会交给 DSH 的模型，模型能在你的电脑上跑命令、读写文件。只加信得过的人；
-只想让她陪聊，把 `.env` 里的 `DSH_PERMISSION_MODE` 设成 `read-only`。NapCat 建议用小号登录。
+**注意**：白名单里的人说的话会交给 DSH 的模型。权限分级：只有主人（`PC_OWNER`，没填就是 `PROACTIVE_QQ` 第一个）私聊时，
+模型按 `DSH_PERMISSION_MODE` 能在你的电脑上跑命令、读写文件；别人私聊、群里一律只读、只陪聊。只加信得过的人；
+主人也只想让她陪聊，把 `.env` 里的 `DSH_PERMISSION_MODE` 设成 `read-only`。NapCat 建议用小号登录。
 
 ## 开发
 

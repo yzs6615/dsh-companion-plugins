@@ -111,10 +111,16 @@ const IMAGE_DIR = path.join(DATA_DIR, 'images');
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const sessions = readJson(SESSIONS_FILE, {});
-// 主人是谁：PC_OWNER（电脑是谁的），没设就是 PROACTIVE_QQ 第一个。写信、明信片、作息被带偏、ChronoLife、电脑上的她都认这一个
+// 主人是谁：PC_OWNER（电脑是谁的），没设就是 PROACTIVE_QQ 第一个；都没填就没有主人，谁都按“别人”算。
+// 写信、明信片、作息被带偏、ChronoLife、电脑上的她、发说说、喇叭、放歌、发图、画画都认这一个
 function ownerQQ() {
   return String(cfg.pcOwner || cfg.proactiveQQ[0] || '');
 }
+/**
+ * 是不是主人私聊：只有这时才用 DSH_PERMISSION_MODE 的全权限（能动手机、电脑、文件），才放歌、发图、画画；
+ * 别人私聊、群里（主人在群里也一样）都只读、只陪聊。
+ */
+const isOwnerChat = (ev) => ev?.message_type !== 'group' && !!ownerQQ() && String(ev?.user_id) === ownerQQ();
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const REMINDERS_FILE = path.join(DATA_DIR, 'reminders.json');
 const state = readJson(STATE_FILE, {});
@@ -549,8 +555,25 @@ const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math
 const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 /** 跑一个 python 脚本（异步，不卡别的聊天），返回最后一行的 JSON（没有就 null）。 */
 function runPyJson(args, timeoutMs) {
+  return runJson(env.PYTHON || 'python', args, timeoutMs);
+}
+/**
+ * 本地 Whisper 听一段音频（media/asr.py，base 模型），返回 { text } 或 null。看视频、听 QQ 语音都走这个。
+ * ASR_SCRIPT 可以换成别的脚本（测试用假的；.mjs/.js 用 node 跑，别的用 python 跑），参数一样：<文件> --model base。
+ */
+function runAsr(file, timeoutMs) {
+  const script = env.ASR_SCRIPT || path.join(ROOT, 'media', 'asr.py');
+  const args = [script, file, '--model', 'base'];
+  return /\.m?js$/i.test(script) ? runJson(process.execPath, args, timeoutMs) : runPyJson(args, timeoutMs);
+}
+/** 本地 Whisper 模型在不在（WHISPER_MODEL_DIR 下的 base/model.bin，跟 media/asr.py 认的一样）。听 QQ 语音前先看一眼，没有就不听、绝不联网去下。 */
+function localWhisper() {
+  if (env.ASR_SCRIPT) return true;
+  return !!env.WHISPER_MODEL_DIR && fs.existsSync(path.join(path.resolve(env.WHISPER_MODEL_DIR), 'base', 'model.bin'));
+}
+function runJson(cmd, args, timeoutMs) {
   return new Promise((resolve) => {
-    const p = spawn(env.PYTHON || 'python', args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    const p = spawn(cmd, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
     let out = '';
     const timer = setTimeout(() => p.kill(), timeoutMs);
     p.stdout.on('data', (d) => (out += d));
@@ -619,7 +642,7 @@ async function watchVideo(file, label = '一段视频') {
   const dur = fr?.duration || 0;
   let heard = '';
   if (dur > 0 && dur <= 600) {
-    const asr = await runPyJson([path.join(ROOT, 'media', 'asr.py'), file, '--model', 'base'], 240_000);
+    const asr = await runAsr(file, 240_000);
     heard = String(asr?.text || '').trim();
   }
   const sheets = fr?.sheets || [];
@@ -674,6 +697,69 @@ async function readMedia(segs, ev) {
   }
   log(`收到${items.map((s) => (s.type === 'video' ? '视频' : '文件')).join('、')}：${notes.length} 个看过了`);
   return { note: notes.join('\n'), images };
+}
+
+// ── 听 QQ 语音：对方发来的 record 段（HEAR_VOICE，默认开）─────────────────────────────
+// get_record 让 NapCat 转成 wav（不行就 get_file 拿原文件，再不行用段里的 path / url）→ 本地 Whisper 听（跟看视频同一个 runAsr）
+// → “（发来语音：……）”拼进这轮的话。只用本地模型、不联网；没模型、没取到、没听出字，就回一句“没听清 打字吧”。群里一样，只是得先叫到她。
+const VOICE_IN_DIR = path.join(DATA_DIR, 'voice-in');
+const DEAF_LINES = ['没听清 打字吧', '这条语音我没听清 你打字说？', '语音没听出来 打字吧'];
+/** 这条消息里的语音：返回 { note }（听出来了）/ { failed: true }（没听成）/ null（没有语音或者 HEAR_VOICE 关了）。 */
+async function readVoice(segs, ev) {
+  const rec = segs.find((s) => s.type === 'record');
+  if (!rec || !cfg.hearVoice) return null;
+  const d = rec.data || {};
+  if (ev.message_type !== 'group') showTyping(ev);
+  if (!localWhisper()) {
+    log('听语音：本地没有 Whisper 模型，没听（不去网上下）');
+    return { failed: true };
+  }
+  fs.mkdirSync(VOICE_IN_DIR, { recursive: true });
+  const base = path.join(VOICE_IN_DIR, String(ev.message_id || Date.now()).replace(/[^\w-]/g, '_'));
+  let file = '';
+  const ref = d.file ? { file: String(d.file) } : d.file_id ? { file_id: String(d.file_id) } : null;
+  for (const params of ref ? [{ ...ref, out_format: 'wav' }, ref] : []) {
+    const action = params.out_format ? 'get_record' : 'get_file';
+    try {
+      const r = await sendRaw({ action, params });
+      const ext = params.out_format ? '.wav' : path.extname(String(r?.file || '')) || '.amr';
+      if (r?.file && fs.existsSync(r.file)) {
+        fs.copyFileSync(r.file, base + ext);
+        file = base + ext;
+      } else if (r?.base64) {
+        fs.writeFileSync(base + ext, Buffer.from(r.base64, 'base64'));
+        file = base + ext;
+      }
+      if (file) break;
+    } catch (err) {
+      log(`取语音失败（${action}）: ${err.message}`);
+    }
+  }
+  try {
+    if (!file && d.path && fs.existsSync(d.path)) {
+      file = base + (path.extname(d.path) || '.amr');
+      fs.copyFileSync(d.path, file);
+    } else if (!file && d.url && /^https?:/i.test(d.url)) {
+      file = await downloadTo(d.url, base + '.amr', 20 * 1048576);
+    }
+  } catch (err) {
+    log(`取语音失败（按地址下）: ${err.message}`);
+    file = '';
+  }
+  const olds = fs.readdirSync(VOICE_IN_DIR).map((f) => path.join(VOICE_IN_DIR, f)).filter((f) => f !== file);
+  for (const old of olds.sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs).slice(0, -30)) fs.rmSync(old, { force: true }); // 只留最近 30 个
+  if (!file || !fs.existsSync(file)) {
+    log('听语音：没取到语音文件');
+    return { failed: true };
+  }
+  const r = await runAsr(file, 120_000);
+  const heard = String(r?.text || '').replace(/\s+/g, ' ').trim();
+  if (!heard) {
+    log('听语音：没听出字');
+    return { failed: true };
+  }
+  log(`听语音：听出 ${heard.length} 字`);
+  return { note: `（发来语音：${heard.slice(0, 500)}）` };
 }
 
 /** Download QQ image segments so the agent can inspect them with read_image. */
@@ -1055,6 +1141,38 @@ function splitText(text, limit) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── Agent invocation ──────────────────────────────────────────────────────
+/**
+ * 杀掉一个子进程连同它开出来的子进程。Windows 上 child.kill() 只杀 dsh 自己，它敲的命令（node、python、powershell）会留下来
+ * 接着跑、还攥着会话的写锁，所以用 taskkill /T /F 杀整棵树；别的系统照旧 kill。已经退出的不碰（PID 可能被别人用了）。
+ */
+function killTree(child) {
+  return new Promise((resolve) => {
+    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return resolve();
+    if (process.platform !== 'win32') {
+      try {
+        child.kill();
+      } catch {}
+      return resolve();
+    }
+    try {
+      const k = spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' });
+      k.on('error', () => {
+        try {
+          child.kill();
+        } catch {}
+        resolve();
+      });
+      k.on('close', resolve);
+    } catch {
+      try {
+        child.kill();
+      } catch {}
+      resolve();
+    }
+  });
+}
+/** 会话本身没了 / 坏了（dsh 的报错：session "…" not found、stored session … failed validation 这些）才值得丢掉重开；超时、起不来这种不是会话的错。 */
+const SESSION_GONE = /session[^\n]{0,160}?(not found|was not found|failed validation|identity mismatch|unknown to this harness|unsupported legacy|shrank below)|SessionFormatUnsupported|raw log:/i;
 /** opts.permissionMode：这一次调用单独降权（比如群里插嘴只让它聊天，不让碰工具）。 */
 function runAgent(prompt, sessionId, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -1090,6 +1208,13 @@ function runAgent(prompt, sessionId, opts = {}) {
 
     let settled = false;
     let timer;
+    const unlinkOut = () => {
+      for (const file of [outPath, errPath]) {
+        try {
+          fs.unlinkSync(file);
+        } catch {}
+      }
+    };
     const cleanup = () => {
       clearTimeout(timer);
       for (const fd of [outFd, errFd]) {
@@ -1097,19 +1222,13 @@ function runAgent(prompt, sessionId, opts = {}) {
           fs.closeSync(fd);
         } catch {}
       }
-      for (const file of [outPath, errPath]) {
-        try {
-          fs.unlinkSync(file);
-        } catch {}
-      }
     };
     const settle = (fn, value) => {
       if (settled) return;
       settled = true;
-      try {
-        child.kill();
-      } catch {}
       cleanup();
+      // 超时 / 出错时它还在跑：整棵进程树一起杀掉（它敲的命令、刷 B站 的脚本这些子进程也别留着占会话的锁），杀完再删输出文件
+      killTree(child).then(unlinkOut, unlinkOut);
       fn(value);
     };
     timer = setTimeout(() => settle(reject, new Error(`处理超时（${cfg.timeoutMs / 1000}s）`)), cfg.timeoutMs);
@@ -1197,6 +1316,12 @@ async function handleEvent(ev) {
     images.push(...media.images);
     text = text ? `${media.note}\n${text}` : media.note;
   }
+  const voice = await readVoice(clean, ev);
+  if (voice?.failed && !text && !images.length) {
+    await reply(ev, pick(DEAF_LINES)); // 只发了条语音、又没听成：直接让对方打字，不用过模型
+    return;
+  }
+  if (voice) text = voice.note ? (text ? `${voice.note}\n${text}` : voice.note) : `${text}\n（还发了条语音，没听清）`.trim();
   if (!text && images.length === 0) {
     if (wokeWord) {
       await reply(ev, '在');
@@ -1212,7 +1337,7 @@ async function handleEvent(ev) {
   const msg = { segs, isGroup, chatKey, who, images, wokeWord };
   if (await first('message:command', ev, text, msg)) return; // 插件的命令（/日记 /唱歌 ……），不调模型
   if (text === '/help' || text === '/帮助') {
-    await reply(ev, `直接说事就行。\n/new 开新对话\n/status 看状态${collect('help', ev)}`);
+    await reply(ev, helpText(ev), { whole: true });
     return;
   }
   if (text === '/new' || text === '/reset') {
@@ -1292,9 +1417,7 @@ async function handleEvent(ev) {
     const n = Number(rm[1]);
     const unit = (rm[2] || 'm').toLowerCase();
     const isHours = unit.startsWith('h') || unit === '小时';
-    const at = Date.now() + n * (isHours ? 3600_000 : 60_000);
-    reminders.push({ qq: String(ev.user_id), at, text: rm[3].trim() });
-    saveReminders();
+    addReminder(ev.user_id, Date.now() + n * (isHours ? 3600_000 : 60_000), rm[3].trim());
     await reply(ev, `行，${n}${isHours ? '小时' : '分钟'}后叫你`);
     return;
   }
@@ -1434,16 +1557,19 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
       const prompt = buildPrompt(ev, text, isGroup, chatKey, ids) + imgNote;
       const tRun = Date.now();
       const known = use('life')?.memoryOff() ? null : sessions[chatKey]?.sessionId; // 开着 ChronoLife 但它没起来：不续接旧会话
+      // 权限分级：只有主人私聊用 DSH_PERMISSION_MODE（能动手机、电脑、文件）；别人私聊、群里（谁都一样）只读，只陪聊
+      const agentOpts = isOwnerChat(ev) ? {} : { permissionMode: 'read-only' };
       let result;
       try {
-        result = await runAgent(prompt, known);
+        result = await runAgent(prompt, known, agentOpts);
       } catch (err) {
-        if (!known) throw err;
-        // A persisted session can disappear (cleared DSH_HOME, profile switch).
+        // 只有会话真没了 / 坏了（清过 DSH_HOME、换过 profile）才丢掉重开；超时、起不来这些保留会话，
+        // 不整轮重跑（不然一轮超时会变成两轮、还把上下文丢了），下面统一用人设口吻回一句让对方再说一遍。
+        if (!known || !SESSION_GONE.test(err.message)) throw err;
         log(`会话 ${known} 不可用，重开: ${err.message}`);
         delete sessions[chatKey];
         saveSessions();
-        result = await runAgent(prompt, null);
+        result = await runAgent(prompt, null, agentOpts);
       }
       if (result.session) {
         sessions[chatKey] = { sessionId: result.session, updatedAt: Date.now() };
@@ -1453,15 +1579,17 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
       if (!answer) {
         // 模型只干活没说话：追一句，让它交代结果，别直接甩“没憋出话”。
         try {
-          const retry = await runAgent('对方还在等你回话。用一句话说下刚才的结果，别沉默。', result.session);
+          const retry = await runAgent('对方还在等你回话。用一句话说下刚才的结果，别沉默。', result.session, agentOpts);
           answer = humanize(retry.text);
         } catch (err) {
           log(`补话失败: ${err.message}`);
         }
       }
       if (!answer) answer = '弄完了，就是一时不知道咋说';
-      // 回复里给插件的标记（[收表情] [心情] [电台] [照片] [放歌] [收礼物]……）各插件在 turn:answer 里抠掉、记进 turn.tags
+      // 回复里给插件的标记（[收表情] [心情] [电台] [照片] [放歌] [收礼物]……）各插件在 turn:answer 里抠掉、记进 turn.tags；
+      // 大白话办事的标记（[提醒:…] [写信] [城市:…] ……）本体在 turn:answer 65 抠掉，回完这句再交给 natural:act 去办
       answer = pipe('turn:answer', answer, turn);
+      if (turn.tags.natural?.length) log(`大白话标记：${turn.tags.natural.map((a) => (a.body ? `${a.kind}:${a.body.slice(0, 30)}` : a.kind)).join('、')}`);
       log(`← ${who}: ${answer.slice(0, 80).replace(/\n/g, ' ')}${answer.length > 80 ? '…' : ''}`);
       // 记进短期记忆的是发出去的字（标记都去掉），再加上插件补的“（唱了一段……）”这种
       const said = pipe('say:extract', { text: answer, tags: {} });
@@ -1504,11 +1632,235 @@ on('turn:answer', (answer, t) => {
   return mt.text || '[表情:开心]';
 }, 20);
 
+// ── 大白话办事：以前要发斜杠命令的事，现在直接跟她说就行 ─────────────────────────────
+// 模型在回复里写个标记（[提醒:30|喝水] [城市:杭州] [写信] [学说话:2] [记住:…] [喇叭:要说的话] [音乐:暂停] [发图:路径] [画:描述]……），
+// 本体在 turn:answer 65 把这些标记全抠掉（不管管它的插件装没装，都不会原样发出去），记进 turn.tags.natural；
+// 回完这句在 turn:after 32 挨个交给 natural:act（谁管谁办，跟斜杠命令走同一套，谁能办照旧按发消息的人算），
+// 她自己已经回过一句了，办成了不另外发“好，30 分钟后提醒你”这种；办不成补一句人设口吻的话。没人接的标记补一句“这个我现在弄不了”。
+// 教她写哪些标记：提示词末尾（prompt:hint 50）拼各插件 natural:hint 给的行。斜杠命令照样能用；/new /status 这些排错的不教给模型。
+// 本体自己管：[提醒]（提醒在本体）、[发图]（发的是数据目录下几个插件做出来的图，见 PIC_DIRS）。
+const NATURAL_RE = /\[(提醒|城市|生日|学说话|记住|忘掉|更正|生活|喇叭|音乐|发图|画)[:：]\s*([^\]]*?)\s*\]|\[(看日记|写信|寄明信片|发说说|别学了)\]/g;
+/** 从回复里抠出大白话办事的标记。没冒号的只认这几个，免得把 [生日] 这种别的字吃掉。 */
+function extractNatural(raw) {
+  const acts = [];
+  const text = String(raw || '').replace(NATURAL_RE, (_, k1, body, k2) => {
+    const a = { kind: k1 || k2, body: String(body || '').trim() };
+    if (!acts.some((x) => x.kind === a.kind && x.body === a.body)) acts.push(a);
+    return '';
+  });
+  return { text: text.replace(/[ \t]+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').trim(), acts };
+}
+on('turn:answer', (answer, t) => {
+  const nat = extractNatural(answer);
+  t.tags.natural = nat.acts;
+  return nat.text || '行';
+}, 65);
+// 记进短期记忆的一句：答应了什么（下一轮还记得），按标记的先后问各插件（natural:note）
+on('turn:spoken', (tags, t) => (t.tags.natural || []).map((a) => collect('natural:note', a, t)).join(''), 40);
+// 回完这句再去办（排在收礼物、给明信片 30 后面，记“问了没回” 35 前面，跟原来一样）
+on('turn:after', async (t) => {
+  if (t.tags.natural?.length) await runNatural(t.ev, t.tags.natural, { chatKey: t.chatKey, isGroup: t.isGroup, turn: t, pics: 0 });
+}, 32);
+async function runNatural(ev, acts, ctx) {
+  for (const a of acts) {
+    try {
+      let done = false;
+      for (const h of hookList('natural:act')) {
+        if (await h.fn(ev, a, ctx)) {
+          done = true;
+          break;
+        }
+      }
+      if (!done) {
+        log(`大白话[${a.kind}]：没装管这个的插件，没办`);
+        await reply(ev, '诶 这个我现在弄不了');
+      }
+    } catch (err) {
+      log(`大白话[${a.kind}]没办成: ${err.message}`);
+      await reply(ev, '诶 刚答应你的那个没弄成').catch(() => {});
+    }
+  }
+}
+
+// [提醒:时间|内容]
+const pad2 = (n) => String(n).padStart(2, '0');
+function addReminder(qq, at, text) {
+  reminders.push({ qq: String(qq), at, text });
+  saveReminders();
+}
+/** 提醒的时间说成人话：今天 08:00 / 明天 08:00 / 11月3日 08:00。 */
+function whenDesc(at) {
+  const d = new Date(at);
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const diff = Math.round((Date.parse(dayKey(d)) - Date.parse(dayKey())) / 86400_000);
+  return diff === 0 ? `今天 ${hm}` : diff === 1 ? `明天 ${hm}` : diff === 2 ? `后天 ${hm}` : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+/**
+ * [提醒:时间|内容] 的时间：分钟数（30、2小时、0.5）或钟点（2026-10-29 08:00、10-29 08:00、明天 8:00、21:30）。
+ * 得在以后（至少 1 秒）、一年以内；看不懂、已经过了的返回 null。
+ */
+const REMIND_MAX_MS = 366 * 86400_000;
+function parseRemind(body) {
+  const [rawWhen, ...rest] = String(body || '').split(/[|｜]/);
+  let what = rest.join(' ').replace(/\s+/g, ' ').trim();
+  if (/^该.+了$/.test(what)) what = what.slice(1, -1); // 到点发的是“该…了”，别变成“该该喝水了了”
+  what = what.slice(0, 100);
+  const w = String(rawWhen || '').trim();
+  if (!what || !w) return null;
+  const now = Date.now();
+  const hm = (h, mi) => Number(h) <= 23 && Number(mi || 0) <= 59;
+  let at = NaN;
+  let m;
+  if ((m = w.match(/^(\d+(?:\.\d+)?)\s*(分钟|分|min|m|小时|个小时|h|hour)?后?$/i))) {
+    at = now + Number(m[1]) * (/小时|^h|hour/i.test(m[2] || '') ? 3600_000 : 60_000);
+  } else if ((m = w.match(/^(?:(\d{4})[-/.年])?(\d{1,2})[-/.月](\d{1,2})[日号]?\s*(\d{1,2})[:：点](\d{1,2})?分?$/))) {
+    if (!hm(m[4], m[5])) return null;
+    const d = new Date(m[1] ? Number(m[1]) : new Date().getFullYear(), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5] || 0));
+    if (d.getMonth() !== Number(m[2]) - 1 || d.getDate() !== Number(m[3])) return null; // 2 月 30 号这种
+    at = d.getTime();
+  } else if ((m = w.match(/^(今天|明天|后天)?\s*(\d{1,2})[:：点](\d{1,2})?分?$/))) {
+    if (!hm(m[2], m[3])) return null;
+    const d = new Date();
+    d.setHours(Number(m[2]), Number(m[3] || 0), 0, 0);
+    d.setDate(d.getDate() + ({ 明天: 1, 后天: 2 }[m[1]] || 0));
+    if (!m[1] && d.getTime() <= now) d.setDate(d.getDate() + 1); // 只说了钟点、今天已经过了：算明天的
+    at = d.getTime();
+  }
+  if (!Number.isFinite(at) || at - now < 1000 || at - now > REMIND_MAX_MS) return null;
+  return { at, text: what };
+}
+on('natural:act', async (ev, a, ctx) => {
+  if (a.kind === '提醒') {
+    const r = parseRemind(a.body);
+    if (!r) {
+      log(`大白话提醒：看不懂「${a.body.slice(0, 40)}」（时间不对或者已经过了），没设`);
+      await reply(ev, pick(['诶 这个时间我没看明白 你再说下几点？', '几点来着 我没整明白 再说一遍']));
+    } else {
+      addReminder(ev.user_id, r.at, r.text);
+      log(`大白话提醒：${ev.user_id} ${whenDesc(r.at)} ${r.text}`);
+    }
+    return true;
+  }
+  if (a.kind === '发图') {
+    if (++ctx.pics > 3) log('大白话发图：一轮最多发 3 张，多的不发');
+    else await sendPicAsked(ev, a.body);
+    return true;
+  }
+  return false;
+}, 10);
+on('natural:note', (a) => {
+  if (a.kind !== '提醒') return '';
+  const r = parseRemind(a.body);
+  return r ? `（答应了${whenDesc(r.at)}提醒对方：${r.text}）` : '';
+});
+
+// [发图:路径]：她截了图（手机截图、看直播的截图、现场照…）想给主人看。
+// 只发数据目录下她自己弄出来的图（PIC_DIRS：手机截图、直播截图、现场照、刷 B站 截的帧、信、明信片、画的画，另加 SCENE_DIR），
+// 路径解开真实路径后还得在这几个文件夹里面（防 ../ 越界、防链接），要是真有的图片文件、10MB 以内；
+// 只在主人私聊里能用（群里、别人私聊都不发，截图可能有主人的隐私）；一轮最多 3 张。发不了就说一句。
+const PIC_DIRS = ['shots', 'live', 'scene', path.join('bili', 'frames'), 'letters', 'postcards', 'drawings'];
+const PIC_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+/** 能发就返回 { file: 真实路径 }，不能发返回 { why }。 */
+function picAllowed(raw) {
+  const p0 = String(raw || '').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '');
+  if (!p0) return { why: '没写路径' };
+  if (p0.split(/[\\/]+/).includes('..')) return { why: '路径里有 ..' };
+  const tries = path.isAbsolute(p0) ? [p0] : [path.resolve(cfg.agentCwd, p0), path.resolve(DATA_DIR, p0)];
+  const found = tries.find((f) => fs.existsSync(f));
+  if (!found) return { why: '没有这个文件' };
+  let real;
+  try {
+    real = fs.realpathSync(found);
+  } catch {
+    return { why: '路径解不开' };
+  }
+  const inside = PIC_DIRS.map((d) => path.join(DATA_DIR, d)).concat(env.SCENE_DIR ? [path.resolve(env.SCENE_DIR)] : []).some((dir) => {
+    let base;
+    try {
+      base = fs.realpathSync(dir);
+    } catch {
+      return false;
+    }
+    const rel = path.relative(base, real);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  });
+  if (!inside) return { why: '不在能发的文件夹里' };
+  const st = fs.statSync(real);
+  if (!st.isFile() || !PIC_EXT.test(real)) return { why: '不是图片' };
+  if (st.size > 10 * 1048576) return { why: '太大' };
+  return { file: real };
+}
+async function sendPicAsked(ev, raw) {
+  if (!isOwnerChat(ev)) {
+    log(`大白话发图：${ev.user_id} 不是主人或者在群里，不发`);
+    return void (await reply(ev, '图只能私聊发给主人'));
+  }
+  const r = picAllowed(raw);
+  if (!r.file) {
+    log(`大白话发图：没发「${String(raw).slice(0, 80)}」（${r.why}）`);
+    return void (await reply(ev, r.why === '没有这个文件' ? '诶 那张图我找不着了' : '那张图发不了'));
+  }
+  await sleep((600 + Math.random() * 800) * pace());
+  await sendMsg(ev, [{ type: 'image', data: { file: 'base64://' + fs.readFileSync(r.file).toString('base64') } }]);
+  log(`大白话发图：发了 ${path.basename(r.file)}`);
+}
+
+/** 提示词里教她写这些标记（本体的 [提醒] [发图] 加上各插件 natural:hint 给的行）。功能关着的不教；只在对方明确要办的时候写。 */
+function naturalHint(t) {
+  const uid = String(t.qq);
+  let out = '\n- 对方让你过会儿或到点提醒 TA 做什么：写 [提醒:几分钟后|提醒啥]（“半小时后”写 30，“两个小时后”写 120）；说的是钟点就写 [提醒:年-月-日 时:分|提醒啥]（照上面【此刻】的日期时间算，比如“明天早上8点”）。提醒啥写短点，像“喝水”“出门拿快递”，到点会私聊发“该喝水了”。没说什么时候就先问，别自己定。';
+  out += '\n- [提醒] 只能设一次性的：对方要“每天”“每周”这种重复的，就设最近的那一次，跟 TA 说清楚每天重复的还不支持；别自己去建计划任务、定时任务。';
+  const mine = t.isGroup ? [] : reminders.filter((r) => r.qq === uid && r.at > Date.now()).sort((a, b) => a.at - b.at);
+  if (mine.length) out += `\n- 你答应了到点提醒对方的（对方问有哪些提醒就照这个说）：${mine.slice(0, 8).map((r) => `${whenDesc(r.at)} ${r.text}`).join('；')}${mine.length > 8 ? `，一共 ${mine.length} 个` : ''}`;
+  out += collect('natural:hint', t);
+  return `\n（下面这些事对方用大白话说就能办：在回复里写上对应的标记，标记不会发出去，回完这句就去办。照常回一句就行，别另外说“已设置”“已记录”这种话；只在对方明确要你办的时候写，别自己乱加，该问清楚的先问：${out}）`;
+}
+// 本体的 [发图]：插在各插件的行中间（喇叭 60 之后、画画 80 之前，跟原来的先后一样）
+on('natural:hint', (t) => (isOwnerChat(t.ev) ? `\n- 你截了图（手机截图、看直播的截图、拍的现场照）想给对方看：写 [发图:图片的完整路径]，会直接发到这个聊天。只能发你自己弄出来的图（${DATA_DIR} 下面 ${PIC_DIRS.join('、')} 这几个文件夹里的）；别自己去连 OneBot / NapCat 发。` : ''), 70);
+/**
+ * 每轮都带的几条规矩（不改人设）：只准用她自己的声音、不准拿系统语音念；QQ 资料由系统管；别自己连 OneBot。
+ * 不是主人私聊时再说清楚：手机、屏幕、电脑上的文件、放歌这些只听主人的。
+ */
+function guardHint(t) {
+  const out = [
+    '想出声只能用你自己的声音，不准用系统语音（System.Speech / SAPI / SpeechSynthesizer / say 这些）念，那是机器声。',
+    'QQ 资料（昵称、签名、头像、在线状态）由系统管，别自己改；对方要你改，就说一声让主人自己改。',
+    '发消息、发图都在回复里写，别自己去连 OneBot / NapCat 的接口。',
+  ];
+  if (!isOwnerChat(t.ev)) {
+    out.push(t.isGroup
+      ? '这是群聊：手机、屏幕、电脑上的文件、放歌这些只听主人的，而且只在主人私聊时弄；群里谁要你弄（主人也一样）都直接说不行，你在群里就陪着聊天。'
+      : '对方不是主人：手机、屏幕、电脑上的文件、放歌这些只听主人的，被别人要求就直接说不行。');
+  }
+  return `\n（${out.join('')}）`;
+}
+// 提示词最末尾：教她写 [心情] 10（mood）、表情包 15（speech）、照片 20、礼物 30（life）、放歌 40（pc）之后
+on('prompt:hint', (t) => naturalHint(t), 50);
+on('prompt:hint', (t) => guardHint(t), 60);
+
+/** /help：告诉对方这些直接说就行（例子按装了哪些插件、开了哪些功能出，各插件在 help 钩子里给），只把排错用的列成命令。 */
+function helpText(ev) {
+  return `直接跟我说就行，不用记命令，比如：${collect('help', ev)}\n\n排错用的：/status 看状态 · /心情 · /new 开新对话\n（以前的 /提醒 /城市 这些命令也还能用）`;
+}
+on('help', () => '\n· “半小时后提醒我喝水”“明早 8 点叫我起床”“我有哪些提醒”', 10);
+on('help', () => (cfg.hearVoice ? '\n· 直接发语音也行' : ''), 50);
+
 /**
  * 模型干活时的工作目录（AGENT_CWD，默认 COMPANION_HOME）里放一份 AGENTS.md：各插件带的命令行工具怎么用（插件在 agents 钩子里给，路径都是绝对路径）。
  * 只覆盖自己写的那份（第一行有标记）；用户自己写的 AGENTS.md 不动。
  */
 const AGENTS_MARK = '<!-- 由 dsh-companion 生成，装卸插件后会重写；想自己写就删掉这一行 -->';
+// 本体的几条规矩排最前面（order 0），各插件的工具说明接在后面
+on('agents', () => `
+## 几条规矩
+
+- 别读 \`${path.join(HOME, '.env')}\`（里面有密钥）。要看开了哪些功能、现在的设置，用 \`node "${path.join(ROOT, 'scripts', 'features.mjs')}" --text\`。
+- 电脑上开网页或软件：只有主人明确让你开、而且主人这会儿在电脑前才开；夜里（安静时段，默认 23 点到早上 9 点）不开。别关别人的程序和窗口，只关你自己开的。
+- 每天重复的提醒（“每天早上 8 点叫我”）还不支持：跟对方说清楚现在只能设一次的。别自己用 \`schtasks\` / \`Register-ScheduledTask\` 建计划任务。
+- 临时脚本和临时文件只放 \`${path.join(DATA_DIR, 'tmp')}\`；别改插件和内核的代码。
+- 别 \`pip install\` / \`npm install -g\`，别自己装软件。缺东西做不了就跟对方说做不了。
+- 发消息、发图都在回复里写（发图写 \`[发图:图片的完整路径]\`），别自己去连 OneBot / NapCat 的接口。QQ 资料（昵称、签名、头像、在线状态）由系统管，别自己改。
+`, 0);
 function writeAgentsMd() {
   if (!env.COMPANION_HOME) return; // 只在装进 DSH 跑时写（测试、开发时工作目录是仓库，别往里写）
   const body = collect('agents');
@@ -1532,10 +1884,19 @@ const PID_FILE = path.join(DATA_DIR, 'kernel.pid');
 {
   const other = Number(readJson(PID_FILE, 0)) || 0;
   let alive = false;
-  try {
-    if (other && other !== process.pid) process.kill(other, 0), (alive = true);
-  } catch {
-    /* 那个进程已经没了 */
+  if (other && other !== process.pid) {
+    try {
+      process.kill(other, 0);
+      alive = true;
+    } catch (err) {
+      alive = err.code === 'EPERM'; // 管理员身份跑的进程，普通身份查会被拒，但它是活的；别的错就是那个进程已经没了
+    }
+    // pid 可能被别的程序复用了：Windows 上再确认一下那是不是 node
+    if (alive && process.platform === 'win32') {
+      try {
+        alive = /node\.exe/i.test(execFileSync('tasklist', ['/FI', `PID eq ${other}`, '/NH'], { encoding: 'utf8', windowsHide: true }));
+      } catch {}
+    }
   }
   if (alive) {
     log(`已经有一个内核在跑（进程 ${other}），这个先不起`);
@@ -1583,7 +1944,7 @@ const api = {
   persona, memoryFile, readMemory, appendMemory, diaryToday, addDiary,
   online: () => !!ws && ws.readyState === 1, selfId: () => selfId,
   sendRaw, sendMsg, sendPrivate, reply, say, showTyping, recordGroup, segments, textOf, senderName,
-  groupContext, mentions, quotesMe, activeChats, batches, owner: () => ownerQQ(),
+  groupContext, mentions, quotesMe, activeChats, batches, owner: () => ownerQQ(), isOwnerChat, // 主人是谁、是不是主人私聊（权限分级都认这个）
   runAgent, runQueued, runPyJson, downloadTo, saveImages, humanize, humanBubbles,
   myState: (...a) => myState(...a), quiet: () => quietNow(), lifeBlock: (...a) => lifeBlock(...a),
   moodChanged: (...a) => moodChanged(...a), // 抠出 [心情:词|为啥] 后交给它（自己找事做那边用）
@@ -1611,8 +1972,8 @@ for (const t of timers) {
   setInterval(run, t.ms);
 }
 
-// 提醒每 30 秒查一次。主动找人（早安晚安、回访、戳你、等你回、写信）在 proactive 插件里。
-setInterval(checkReminders, 30_000);
+// 提醒每 REMINDER_CHECK_MS（默认 30 秒）查一次。主动找人（早安晚安、回访、戳你、等你回、写信）在 proactive 插件里。
+setInterval(checkReminders, cfg.reminderCheckMs);
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {

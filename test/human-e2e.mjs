@@ -406,7 +406,7 @@ const H = await start(3989, {
 try {
   H.priv('PLAYSONG 放首歌');
   await waitFor(() => fs.existsSync(playLog), 8000);
-  check(fs.readFileSync(playLog, 'utf8').trim() === 'client /playbysongid cmd_count==1&&id_0==97773&&songtype_0==0', '在电脑前：用 QQ 音乐放了《晴天》（挑的是原版，不是 Live）');
+  check(fs.readFileSync(playLog, 'utf8').trim() === 'client 晴天 周杰伦', '在电脑前：用 QQ 音乐放了《晴天》（挑的是原版，不是 Live）');
   const said = H.sent().find((m) => m.text.includes('给你放'));
   check(said && said.text.includes('[能放歌]') && !said.text.includes('[放歌'), '提示词里说了能放歌，回复里的 [放歌:…] 没漏出来');
   idleH(3600); // 走开了

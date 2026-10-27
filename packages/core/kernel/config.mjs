@@ -76,6 +76,8 @@ export const cfg = {
   pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）。主人是谁本体也要用（写信、明信片、作息被带偏…），电脑上的她那些设置在 pc 插件里
   media: (env.MEDIA || 'true') !== 'false', // 看懂发来的视频（抽帧 + 听）和文件
   mediaMaxMB: Number(env.MEDIA_MAX_MB ?? 60),
+  hearVoice: (env.HEAR_VOICE || 'true') !== 'false', // 听对方发来的 QQ 语音：本地 Whisper 转成字（只用本地模型，不联网），没模型 / 没听清就让对方打字
+  reminderCheckMs: Number(env.REMINDER_CHECK_MS ?? 30_000), // 多久看一眼有没有到点的提醒（测试里调短）
 };
 
 export function parseList(value) {

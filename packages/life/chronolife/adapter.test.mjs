@@ -44,3 +44,19 @@ test('legacy inference, correction, deletion and restart do not restore exact ol
     assert.equal(adapter.filter('u2', '昨天：虚拟植物开了新叶'), '');
   } finally { engine.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('findMemory: plain-language forget/correct finds the note by its words, never chat logs or other chats', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'life-find-'));
+  const engine = new ChronoLife({ dbPath: path.join(dir, 'chronolife/life.sqlite') });
+  const adapter = new LifeAdapter({ engine, dataDir: dir, owner: '1', clearSession: () => {} });
+  try {
+    engine.record_interaction({ id: 'qq:u1:5:in', scope: 'u1', text: '帮我记着下周三考试', direction: 'in' });
+    engine.record_memory({ id: 'note:a', scope: 'u1', text: '下周三考试', source: 'observed', layer: 'L3', importance: .9 });
+    engine.record_memory({ id: 'note:b', scope: 'u2', text: '下周五搬家', source: 'observed', layer: 'L3', importance: .9 });
+    assert.equal(adapter.findMemory('u1', '周三考试')?.id, 'note:a');
+    assert.equal(adapter.findMemory('u1', '下周三的考试')?.id, 'note:a');
+    assert.equal(adapter.findMemory('u1', '下周五搬家'), null);
+    assert.equal(adapter.findMemory('u1', '完全不相干'), null);
+    assert.equal(adapter.findMemory('u1', ''), null);
+  } finally { engine.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

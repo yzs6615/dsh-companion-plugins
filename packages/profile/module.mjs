@@ -236,22 +236,20 @@ export default function setup(api) {
     }
   }
 
-  // /说说：主人私聊让她马上发一条（原来在“对方开口”之前，所以挂 message:command）
-  api.on('message:command', async (ev, text) => {
-    if (text !== '/说说') return false;
-    if (!cfg.qzone || ev.message_type === 'group' || String(ev.user_id) !== String(cfg.proactiveQQ[0] || api.owner())) {
-      await reply(ev, cfg.qzone ? '这个只听主人的' : '还没开 QQ 空间');
-      return true;
-    }
-    if (qzoneRunning) {
-      await reply(ev, '在发了 别催');
-      return true;
-    }
+  /** 发说说（/说说 或者大白话 [发说说]），只听主人的（跟放歌、喇叭一样认 api.owner()）。发了什么还是告诉主人一声。 */
+  async function startQzone(ev, natural = false) {
+    const no = async (line, why) => {
+      if (natural) log(`大白话说说：没发（${why}）`);
+      await reply(ev, line);
+    };
+    if (!cfg.qzone || ev.message_type === 'group' || String(ev.user_id) !== api.owner()) return void (await no(cfg.qzone ? '这个只听主人的' : '还没开 QQ 空间', cfg.qzone ? `${ev.user_id} 不是主人或者在群里` : '没开 QQ 空间'));
+    if (qzoneRunning) return void (await no('在发了 别催', '正在发'));
     qzoneRunning = true;
     try {
       const r = await postQzone();
       (state._qzone ||= {}).day = dayKey();
       saveState();
+      if (natural) log(r.ok ? `大白话说说：发了一条（${r.text.length} 字${r.photo ? '，配了张照片' : ''}）` : `大白话说说：这次没发（${r.why}）`);
       await reply(ev, r.ok ? `发了：${r.text}${r.photo ? '（配了张照片）' : ''}` : `没发（${r.why}）`, { whole: true });
     } catch (err) {
       log(`QQ 空间没发成: ${err.message}`);
@@ -259,8 +257,21 @@ export default function setup(api) {
     } finally {
       qzoneRunning = false;
     }
+  }
+  // /说说：主人私聊让她马上发一条（原来在“对方开口”之前，所以挂 message:command）
+  api.on('message:command', async (ev, text) => {
+    if (text !== '/说说') return false;
+    await startQzone(ev);
     return true;
   });
+  // 大白话：主人说“发条说说”，她回复里写 [发说说]（本体抠掉标记，回完这句交到这里），要好一会儿，不占着这个聊天
+  api.on('natural:act', (ev, a) => {
+    if (a.kind !== '发说说') return false;
+    startQzone(ev, true).catch((err) => log(`QQ 空间没发成: ${err.message}`));
+    return true;
+  });
+  api.on('natural:hint', (t) => (!t.isGroup && cfg.qzone && String(t.qq) === api.owner() ? '\n- 对方让你发条 QQ 空间说说：写 [发说说]，会拿你最近自己干的事写一条发出去。' : ''), 50);
+  api.on('help', (ev) => (ev.message_type !== 'group' && cfg.qzone && String(ev.user_id) === api.owner() ? '\n· “发条说说”' : ''), 120);
 
   // ── 定时和启动日志（原来在 main 段末尾）────────────────────────────────────
   if (cfg.onlineStatus) {
@@ -295,9 +306,10 @@ export function features(cfg, { env, DATA_DIR, state, on, dayKey }) {
         ['在线状态和个签', on(cfg.onlineStatus || cfg.longnick), (() => { const p = state._presence || {}; return [p.name ? `现在：${p.name}` : '', p.sign ? `个签：${p.sign}` : ''].filter(Boolean).join(' · ') || '还没改过'; })(), 'QQ 在线状态跟着她过日子变：半夜睡觉中、熬夜中、自己找事做时摸鱼中、唱完歌听歌中，平时跟心情（元气满满、无聊中、想静静…）。每晚写完日记换一句个性签名（不带任何人名和私事）。'],
         ['自定义在线状态', on(cfg.diyStatus), (() => { const n = state._presence?.name || ''; return n.startsWith('diy:') ? `现在：${n.slice(4)}` : ''; })(), 'QQ 名字旁边的状态写她自己的一句话：自己找事做时“在刷B站：…”、录电台时“在录电台”、你电脑上在放歌时“陪你听：歌名”、生气委屈时一句心情（“别惹我”）；没有具体的事、或者在睡觉，就用预设的那几种。10 分钟内不来回换，设置失败 3 次就退回预设。'],
         ['心情头像', on(cfg.moodAvatar), (() => { const a = state._avatar || {}; const n = (() => { try { return fs.readdirSync(AVATAR_DIR).filter((f) => /\.(png|jpe?g|webp)$/i.test(f)).length; } catch { return 0; } })(); return `${n} 张图${a.name ? ` · 现在：${a.name}（${a.day === dayKey() ? `今天换了 ${a.count} 次` : '今天还没换'}）` : ''}`; })(), `她心情变了，QQ 头像跟着换成对应的图：${AVATAR_DIR} 里按名字放图（平常、开心、生气、委屈、困、睡觉、得意、烦、无聊、懒，没有的就用相近的，最后用“平常”），半夜换成“睡觉”。一天最多换 ${cfg.moodAvatarMaxDay} 次、两次至少隔 ${cfg.moodAvatarGapMin} 分钟，免得小号被风控。`],
-        ['QQ 空间说说', on(cfg.qzone), cfg.qzone ? `${{ 1: '所有人', 4: '好友', 64: '仅自己' }[cfg.qzoneRight] || cfg.qzoneRight}可见 · 一天最多一条` : '', `${cfg.qzoneHours.join('~')} 点之间偶尔发一条说说（大概两天一条），写她自己最近干的事（刷到的视频、出去玩…），有时配一张“现在的她”。只写她自己的事：不写聊天内容，写到最近聊过的人的名字、QQ 号就不发；开着 ChronoLife 时只用它记下的虚拟事件。主人私聊发 /说说 可以让她马上发一条。`],
+        ['QQ 空间说说', on(cfg.qzone), cfg.qzone ? `${{ 1: '所有人', 4: '好友', 64: '仅自己' }[cfg.qzoneRight] || cfg.qzoneRight}可见 · 一天最多一条` : '', `${cfg.qzoneHours.join('~')} 点之间偶尔发一条说说（大概两天一条），写她自己最近干的事（刷到的视频、出去玩…），有时配一张“现在的她”。只写她自己的事：不写聊天内容，写到最近聊过的人的名字、QQ 号就不发；开着 ChronoLife 时只用它记下的虚拟事件。主人私聊说“发条说说”（或发 /说说）可以让她马上发一条。`],
       ]],
     ],
+    natural: [['“发条说说”', cfg.qzone ? '马上发一条 QQ 空间说说（只听主人的）' : '没开 QQ 空间', 120]],
     commands: [['/说说', '让她马上发一条 QQ 空间说说（只听主人的）', 140]],
   };
 }
