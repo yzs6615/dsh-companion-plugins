@@ -17,23 +17,19 @@
  * 只读本机文件，不联网。页面里不放 API Key、OneBot token、手机 PIN 这类密钥。
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+// 找 COMPANION_HOME（装进 DSH 后单独跑、又没设时用 <DSH_HOME 或 ~/.dsh>/companion），跟别的小工具共用 home.mjs
+import { dataDir } from './home.mjs';
 
-if (!process.env.COMPANION_HOME) {
-  const kernel = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const home = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'companion');
-  if (!fs.existsSync(path.join(kernel, '.env')) && fs.existsSync(path.join(home, '.env'))) process.env.COMPANION_HOME = home;
-}
-// config.mjs 一 import 就按 COMPANION_HOME 读 .env，所以放在上面那段之后
+// config.mjs 一 import 就按 COMPANION_HOME 读 .env，所以在 home.mjs 定下 COMPANION_HOME 之后再 import
 const { cfg, env, parseList, ROOT, HOME } = await import('../config.mjs');
 const { selfState, familiarity, nowDesc, dayKey } = await import('../human.mjs');
 
 const argv = process.argv.slice(2);
 const outIdx = argv.indexOf('--out');
-const DATA_DIR = env.BRIDGE_DATA ? path.resolve(env.BRIDGE_DATA) : path.join(HOME, 'data');
+const DATA_DIR = dataDir(env);
 const out = path.resolve(outIdx >= 0 && argv[outIdx + 1] ? argv[outIdx + 1] : path.join(DATA_DIR, 'features.html'));
 
 const readJson = (f, fallback) => {

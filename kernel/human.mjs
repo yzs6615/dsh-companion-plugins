@@ -435,3 +435,23 @@ export function parseLocalTime(s) {
   const t = new Date(+m[1], +m[2] - 1, +m[3], m[4] ? +m[4] : 9, m[5] ? +m[5] : 0).getTime();
   return Number.isFinite(t) ? t : 0;
 }
+
+// ── 人设里的条件段 ────────────────────────────────────────────────────────
+/**
+ * 人设（默认人设和自己写的 persona.md 都一样）里可以写条件段：
+ *   <!-- if:voice -->
+ *   ……只有发语音开着才进提示词的话……
+ *   <!-- end -->
+ * isOn(名字) 为真就留下段里的字，不然整段删掉；标记本身都不留。可以嵌套（先处理最里面的）。
+ * 跟原来安装器生成人设时的写法一样：段里删完后连着三个以上的换行并成一个空行。
+ * 没配对的 if / end 标记也删掉（只删标记那一行，字留着）。
+ */
+export function expandPersona(text, isOn) {
+  let s = String(text ?? '');
+  if (!/<!--\s*(?:if:[\w-]+|end)\s*-->/.test(s)) return s;
+  const block = /<!--\s*if:([\w-]+)\s*-->[ \t]*\r?\n?((?:(?!<!--\s*if:[\w-]+\s*-->)[\s\S])*?)<!--\s*end\s*-->[ \t]*\r?\n?/;
+  while (block.test(s)) s = s.replace(block, (_, name, body) => (isOn(name) ? body : ''));
+  return s
+    .replace(/[ \t]*<!--\s*(?:if:[\w-]+|end)\s*-->[ \t]*\r?\n?/g, '')
+    .replace(/(\r?\n){3,}/g, '\n\n');
+}

@@ -227,6 +227,11 @@ function saveSessions() {
 // ── persona ───────────────────────────────────────────────────────────────
 // Read on every message (cached by mtime) so editing persona.md takes effect
 // without restarting the bridge.
+// 人设里的条件段 <!-- if:名字 --> … <!-- end -->（见 human.mjs 的 expandPersona）：名字就是 cfg 上的设置名，
+// 功能开着才留下那段；设置在插件里，插件没装时 cfg 上是 undefined，当关。
+// 跟原来安装器的勾选项对不上名字的在这里对一下：stickers = 收表情包（STEAL_STICKERS）。
+const PERSONA_FLAGS = { stickers: 'stealStickers' };
+const personaOn = (name) => !!cfg[PERSONA_FLAGS[name] || name];
 let personaCache = { mtime: 0, text: '' };
 function persona() {
   // 自己的人设没写就先用自带的默认人设
@@ -234,7 +239,7 @@ function persona() {
   try {
     const { mtimeMs } = fs.statSync(file);
     if (mtimeMs !== personaCache.mtime) {
-      personaCache = { mtime: mtimeMs, text: fs.readFileSync(file, 'utf8').trim().replace(/\{\{NAME\}\}/g, cfg.botName) }; // 默认人设里的名字是 {{NAME}}，换成 BOT_NAME
+      personaCache = { mtime: mtimeMs, text: human.expandPersona(fs.readFileSync(file, 'utf8'), personaOn).trim().replace(/\{\{NAME\}\}/g, cfg.botName) }; // 默认人设里的名字是 {{NAME}}，换成 BOT_NAME
       log(`人设已加载: ${file} (${personaCache.text.length} 字)`);
     }
     return personaCache.text;

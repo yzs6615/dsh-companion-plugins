@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 /**
- * 下载 Twemoji（CC-BY 4.0）表情图，按情绪放进 data/stickers/<情绪>/。
+ * 下载 Twemoji（CC-BY 4.0）表情图，按情绪放进表情库 <数据目录>/stickers/<情绪>/（设了 STICKER_DIR 就放那）。
  * 每个情绪 10 张；已存在就跳过。想换素材直接替换目录里的图即可。
  *
  *   node scripts/fetch-stickers.mjs
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+// 放进数据目录下的 stickers/（跟 speech 插件一样：STICKER_DIR 优先，其次 <数据目录>/stickers；
+// 数据目录 BRIDGE_DATA，没有就是 <COMPANION_HOME>/data，装进 DSH 后单独跑也找得到，见 home.mjs；它要排在 config.mjs 前面）
+import { dataDir } from './home.mjs';
+import { env } from '../config.mjs';
 
-const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(dataDir(env), 'stickers');
 const BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72';
 
 const MOODS = {
@@ -23,7 +26,7 @@ const MOODS = {
 };
 
 for (const [mood, codes] of Object.entries(MOODS)) {
-  const dir = path.join(ROOT, 'data', 'stickers', mood);
+  const dir = path.join(DIR, mood);
   fs.mkdirSync(dir, { recursive: true });
   for (const code of codes) {
     const dest = path.join(dir, `${code}.png`);

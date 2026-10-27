@@ -11,7 +11,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { cfg, env, ROOT } from '../config.mjs';
+// 数据目录跟内核一样（BRIDGE_DATA，没有就是 <COMPANION_HOME>/data；装进 DSH 后单独跑也找得到），见 home.mjs；它要排在 config.mjs 前面
+import { dataDir } from './home.mjs';
+import { cfg, env } from '../config.mjs';
 import { parseJsonLoose } from '../human.mjs';
 
 // 表情库怎么放、index.json 怎么写，跟 speech 插件（说话的样子）的 stickers.mjs 一样；这个脚本要用本体的设置调模型，所以抄一份在这里
@@ -43,7 +45,7 @@ function listStickers(dir) {
 }
 
 const argv = process.argv.slice(2);
-const DATA_DIR = env.BRIDGE_DATA ? path.resolve(env.BRIDGE_DATA) : path.join(ROOT, 'data');
+const DATA_DIR = dataDir(env);
 const DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(DATA_DIR, 'stickers');
 const BATCH = 6;
 

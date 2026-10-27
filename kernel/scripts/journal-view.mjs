@@ -10,10 +10,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { cfg, env, ROOT } from '../config.mjs';
+// 数据目录跟内核一样（BRIDGE_DATA，没有就是 <COMPANION_HOME>/data；装进 DSH 后单独跑也找得到），见 home.mjs；它要排在 config.mjs 前面
+import { dataDir } from './home.mjs';
+import { cfg, env } from '../config.mjs';
 
 const argv = process.argv.slice(2);
-const DATA_DIR = env.BRIDGE_DATA ? path.resolve(env.BRIDGE_DATA) : path.join(ROOT, 'data');
+const DATA_DIR = dataDir(env);
 const JDIR = path.join(DATA_DIR, 'journal');
 const RAW = path.join(JDIR, 'raw');
 const oi = argv.indexOf('--out');
