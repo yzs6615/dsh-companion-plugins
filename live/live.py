@@ -89,11 +89,15 @@ def transcribe(wav_path: Path, model_size: str = "small") -> dict:
     from faster_whisper import WhisperModel
 
     print(f"[live] loading whisper {model_size} (cpu/int8)...", flush=True)
-    # 只用本地模型（WHISPER_MODEL_DIR 或 tools/whisper-models 下的 <大小>/model.bin），找不到就报错，绝不自己去网上下
-    base = Path(os.environ.get("WHISPER_MODEL_DIR") or (TOOLS / "whisper-models"))
-    local = base / model_size
+    # 只用本地模型（<模型目录>/<大小>/model.bin），找不到就报错，绝不自己去网上下。
+    # 模型目录：WHISPER_MODEL_DIR；没设先找 <COMPANION_HOME>/tools/whisper-models（本体的 fetch-whisper.mjs 没设时下到这），再找插件目录下的 tools/whisper-models
+    if os.environ.get("WHISPER_MODEL_DIR"):
+        bases = [Path(os.environ["WHISPER_MODEL_DIR"])]
+    else:
+        bases = ([Path(os.environ["COMPANION_HOME"]) / "tools" / "whisper-models"] if os.environ.get("COMPANION_HOME") else []) + [TOOLS / "whisper-models"]
+    local = next((b / model_size for b in bases if (b / model_size / "model.bin").exists()), bases[0] / model_size)
     if not (local / "model.bin").exists():
-        raise RuntimeError(f"没有本地 whisper 模型：{local}（用 scripts/fetch-whisper.mjs 下，或设 WHISPER_MODEL_DIR）")
+        raise RuntimeError(f"没有本地 whisper 模型：{local}（用本体的 kernel/scripts/fetch-whisper.mjs 下，或设 WHISPER_MODEL_DIR）")
     model = WhisperModel(str(local), device="cpu", compute_type="int8", local_files_only=True)
     segments, info = model.transcribe(
         str(wav_path), language="zh", vad_filter=True, beam_size=5
