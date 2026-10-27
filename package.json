@@ -12,7 +12,9 @@
   "files": [
     "README.md",
     "cordis.patch.yml",
+    "imagegen.mjs",
     "index.js",
+    "letter",
     "module.mjs"
   ],
   "engines": {
