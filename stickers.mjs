@@ -58,17 +58,20 @@ export function matchScore(query, desc) {
   return Math.min(1, score);
 }
 /**
- * 按意思挑一张：分数够高（≥ min）的里面，跟最高分差不多的随机挑一张（别老发同一张）。
- * 返回 { file, rel, desc, score } 或 null。
+ * 按意思挑一张：分数够高（≥ min）的里面，跟最高分差不多的随机挑一张；avoid 是最近发过的（一张或一串），先不挑，别老发那几张。
+ * 差不多的都最近发过了，就在别的够格的里面挑；实在没有才发重的。返回 { file, rel, desc, score } 或 null。
  */
-export function pickByMeaning(dir, query, { min = 0.35, avoid = '' } = {}) {
+export function pickByMeaning(dir, query, { min = 0.35, avoid = [] } = {}) {
+  const skip = new Set(Array.isArray(avoid) ? avoid : [avoid]);
   const idx = readIndex(dir);
   const scored = listStickers(dir)
     .map((s) => ({ ...s, desc: idx[s.rel]?.desc || '', score: matchScore(query, `${idx[s.rel]?.desc || ''} ${s.mood}`) }))
     .filter((s) => s.desc && s.score >= min)
     .sort((a, b) => b.score - a.score);
   if (!scored.length) return null;
-  const top = scored.filter((s) => s.score >= scored[0].score - 0.08 && s.rel !== avoid);
-  const pool = top.length ? top : scored.slice(0, 1);
-  return pool[Math.floor(Math.random() * pool.length)];
+  const near = scored.filter((s) => s.score >= scored[0].score - 0.15);
+  const fresh = near.filter((s) => !skip.has(s.rel));
+  const pool = fresh.length ? fresh : scored.filter((s) => !skip.has(s.rel)).slice(0, 5);
+  const use = pool.length ? pool : near;
+  return use[Math.floor(Math.random() * use.length)];
 }
