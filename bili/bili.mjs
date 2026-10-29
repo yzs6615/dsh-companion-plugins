@@ -11,6 +11,9 @@
  *        --listen N：没字幕时下载音轨用本地 Whisper 听前 N 分钟（最多 3 分钟，慢，十几秒到一分钟；只用本地模型，没有就说没听成）
  *        --frames [N]：挑弹幕最密的时刻 + 换镜头的地方 + 均匀铺开截图，去掉重复镜头，
  *          每 9 格拼一张（不写 N 就按时长：≤3 分钟 9 帧，≤10 分钟 18，再长 27），再用 read_image 看
+ *   node bili/bili.mjs pics BV号或链接 [--n 12]     评论区里大家发的图（主要逛 DeepSeek 二创）：按赞数挑，下成小图，
+ *        动图不大就要原图；存 <数据目录>/bili/pics/<BV号>/，用 read_image 看
+ *   node bili/bili.mjs keep 图片路径 情绪 一句话描述   把 pics 下的一张收进表情包（情绪：开心/无语/生气/卖萌/得意/委屈/震惊）
  *   node bili/bili.mjs seen [条数]                 最近看过的
  *
  * B站风控（412 / -352 / -412）时不硬刷：记 15 分钟冷却，期间直接说“歇会”。
@@ -384,6 +387,117 @@ async function watch(target, listenMin = 0, frameCount = 0) {
   console.log(lines.join('\n'));
 }
 
+// ── 评论区的图（主要逛 DeepSeek 二创）：下成小图给她看，看中的用 keep 收进表情包 ───────────────────────
+const PICS = path.join(DATA, 'pics');
+const STICKER_DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(path.dirname(DATA), 'stickers');
+const STICKER_MOODS = ['开心', '无语', '生气', '卖萌', '得意', '委屈', '震惊'];
+const KEEP_MAX = Number(env.STEAL_MAX ?? 40); // 跟从聊天里收表情一样：每种情绪最多留这么多张收来的
+
+async function pics(target, n = 12) {
+  if (!parseVideoRef(target)) throw new Error('看哪个？pics 后面跟 BV 号或链接（b23.tv 短链也行）');
+  let ref;
+  try {
+    ref = await resolveVideoRef(target);
+  } catch (err) {
+    throw new Error(`短链打不开：${err.message}`);
+  }
+  if (!ref) throw new Error('这个短链跳过去不是视频，换个 BV 号或完整链接');
+  const v = await get('/x/web-interface/wbi/view?' + wbi(ref.bvid ? { bvid: ref.bvid } : { aid: ref.aid }));
+  const bvid = v.bvid || ref.bvid;
+  // 热评（带楼中楼）里带图的；最多翻 3 页，同一张图只算一次
+  const found = [];
+  const srcs = new Set();
+  const take = (r) => {
+    for (const p of r?.content?.pictures || []) {
+      if (!p?.img_src || srcs.has(p.img_src)) continue;
+      srcs.add(p.img_src);
+      found.push({ src: p.img_src, kb: Number(p.img_size) || 0, like: r.like || 0, text: strip(r.content?.message || '').replace(/\s+/g, ' ').slice(0, 40) });
+    }
+    for (const sub of r?.replies || []) take(sub);
+  };
+  let offset = '';
+  for (let page = 0; page < 3 && found.length < n; page++) {
+    const q = { oid: v.aid, type: 1, mode: 3, plat: 1, ...(offset ? { pagination_str: JSON.stringify({ offset }) } : {}) };
+    const rp = await get('/x/v2/reply/wbi/main?' + wbi(q));
+    for (const r of [...(rp.top_replies || []), ...(rp.replies || [])]) take(r);
+    offset = rp.cursor?.pagination_reply?.next_offset || '';
+    if (!offset || rp.cursor?.is_end) break;
+  }
+  if (!found.length) {
+    console.log(`【${strip(v.title)}】评论区里没翻到图，换一个看看`);
+    return;
+  }
+  found.sort((a, b) => b.like - a.like);
+  const dir = path.join(PICS, bvid);
+  fs.mkdirSync(dir, { recursive: true });
+  // 只留最近 20 个视频的图，旧的删掉（都是临时下的小图）
+  const old = fs.readdirSync(PICS).map((d) => ({ d, t: fs.statSync(path.join(PICS, d)).mtimeMs })).sort((a, b) => b.t - a.t).slice(20);
+  for (const { d } of old) fs.rmSync(path.join(PICS, d), { recursive: true, force: true });
+  const lines = [`【${strip(v.title)}】评论区里的图（${bvid}，按赞数排，挑了 ${Math.min(n, found.length)} 张）：`];
+  let i = 0;
+  for (const p of found.slice(0, n)) {
+    i++;
+    // 动图不大就要原图（缩了就不动了），别的都要 300 宽的小图，省流量
+    const gif = /\.gif$/i.test(p.src) && p.kb > 0 && p.kb < 2048;
+    const url = (gif ? p.src : `${p.src}@300w.webp`).replace(/^http:\/\/(i\d\.hdslb\.com)\//, 'https://$1/'); // B站图床给的是 http，换成 https
+    const file = path.join(dir, `${String(i).padStart(2, '0')}${gif ? '.gif' : '.webp'}`);
+    try {
+      const buf = await raw(url, { binary: true, cdn: true });
+      if (buf.length < 200) throw new Error('太小');
+      fs.writeFileSync(file, buf);
+      lines.push(`${i}. ${file}（${Math.max(1, Math.round(buf.length / 1024))}KB，${num(p.like)}赞）${p.text ? ` 配的话：${p.text}` : ''}`);
+    } catch (err) {
+      if (err instanceof RiskControl) throw err;
+      lines.push(`${i}. 没下下来（${err.message}）`);
+    }
+  }
+  lines.push(
+    '用 read_image 一张张看。真觉得好玩、以后想拿来斗图的，收进表情包（一次最多收 3 张，宁缺毋滥；截图、长图、广告、看不懂的别收）：',
+    `node "${process.argv[1]}" keep 图片完整路径 情绪 一句话描述（画面：什么时候用，20 字以内）   情绪：${STICKER_MOODS.join('/')}`,
+  );
+  const seen = seenList().filter((s) => s.bvid !== bvid);
+  seen.unshift({ bvid, title: strip(v.title), up: v.owner?.name, at: Date.now() });
+  fs.writeFileSync(SEEN, JSON.stringify(seen.slice(0, 300)));
+  console.log(lines.join('\n'));
+}
+
+/** 把 pics 下下来的一张收进表情包：同一张不收两次，每种情绪收来的最多 KEEP_MAX 张（满了扔最早收的），描述写进 index.json。 */
+function keep(file, mood, desc = '') {
+  if (!STICKER_MOODS.includes(mood)) throw new Error(`情绪只能是：${STICKER_MOODS.join('/')}`);
+  const src = path.resolve(String(file || ''));
+  if (!src.toLowerCase().startsWith(path.resolve(PICS).toLowerCase() + path.sep) || !fs.existsSync(src)) {
+    throw new Error('只能收 pics 下下来的那些图（给完整路径）');
+  }
+  const buf = fs.readFileSync(src);
+  const hash = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 12);
+  for (const m of STICKER_MOODS) {
+    const d = path.join(STICKER_DIR, m);
+    if (fs.existsSync(d) && fs.readdirSync(d).some((f) => f.includes(hash))) {
+      console.log('这张早就收过了');
+      return;
+    }
+  }
+  const dir = path.join(STICKER_DIR, mood);
+  fs.mkdirSync(dir, { recursive: true });
+  const mine = fs
+    .readdirSync(dir)
+    .filter((f) => f.startsWith('learned-'))
+    .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => a.t - b.t);
+  while (mine.length >= KEEP_MAX) fs.unlinkSync(path.join(dir, mine.shift().f));
+  const name = `learned-bili-${hash}${path.extname(src).toLowerCase()}`;
+  fs.writeFileSync(path.join(dir, name), buf);
+  const d = String(desc || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (d) {
+    const idxFile = path.join(STICKER_DIR, 'index.json');
+    const idx = readJson(idxFile, {});
+    idx[`${mood}/${name}`] = { desc: d, at: Date.now() };
+    fs.writeFileSync(idxFile + '.tmp', JSON.stringify(idx, null, 1));
+    fs.renameSync(idxFile + '.tmp', idxFile);
+  }
+  console.log(`收好了：${mood}/${name}${d ? `（${d}）` : '（没写描述：按意思挑的时候挑不到它，只有按情绪随便挑时会用上）'}`);
+}
+
 function showSeen(n = 10) {
   const list = seenList().slice(0, n);
   console.log(list.length ? `最近看过：\n${list.map((s) => `- ${new Date(s.at).toLocaleString('zh-CN', { hour12: false })} ${s.title}（${s.bvid}，UP ${s.up}）`).join('\n')}` : '最近没看过啥');
@@ -401,7 +515,16 @@ if (cmd === 'seen') {
   showSeen(Number(positional[0]) || 10);
   process.exit(0);
 }
-if (!['hot', 'rank', 'search', 'watch'].includes(cmd)) {
+if (cmd === 'keep') {
+  try {
+    keep(positional[0], positional[1], positional.slice(2).join(' '));
+  } catch (err) {
+    console.log(`没收成：${err.message}`);
+    process.exitCode = 1;
+  }
+  process.exit();
+}
+if (!['hot', 'rank', 'search', 'watch', 'pics'].includes(cmd)) {
   console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\n\/\*\*?/, '').replace(/^ \* ?/gm, '').trim());
   process.exit(cmd ? 1 : 0);
 }
@@ -411,6 +534,7 @@ try {
   if (cmd === 'hot') await hot(Number(positional[0]) || 10);
   else if (cmd === 'rank') await rank(Number(positional[0]) || 10);
   else if (cmd === 'search') await search(positional.join(' '), Number(opt('--n', 8)), opt('--order', 'totalrank'));
+  else if (cmd === 'pics') await pics(positional.join(' '), Math.min(20, Number(opt('--n', 12)) || 12));
   else if (cmd === 'watch') {
     // --frames 不带数字 = 按时长自动（9 / 18 / 27 帧）；带数字最多 27
     const fi = rest.indexOf('--frames');

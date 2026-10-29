@@ -9,9 +9,11 @@
  * 没装这个插件：本体照常聊天，心情只按时段，这些都当没有。
  * node:sqlite（ChronoLife）只在开着 CHRONOLIFE 时才 import：老的 Node 22 没有它，静态 import 会让整个内核起不来。
  */
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseVideoRef } from './bili/lib.mjs';
 import { createRadio, radioRequest, extractRadioTag, parseAsk, findRadioSong, radioAgo } from './radio.mjs';
 import { genImage } from './imagegen.mjs';
 import { chronoSettings } from './chronolife/settings.mjs';
@@ -71,6 +73,42 @@ export default async function setup(api) {
   const { dayKey, nowDesc, playChance, chooseActivity, extractMoodTag, extractDiary, parseJsonLoose } = api.human;
   const use = api.use;
   Object.assign(cfg, settings(env, api.parseList));
+
+  // ── 分享来的 B站视频（卡片，或者打的 BV 号、链接）：用刷 B站那套真去看一眼 ─────────────
+  // 简介、标签、弹幕刷得最多的、热评写进这句话后面；主人私聊里她能动手，提醒她想细看可以自己再听、再看画面。
+  // 测试用 BILI_SCRIPT 换成假的，不联网。
+  const runText = (args, timeoutMs) =>
+    new Promise((resolve) => {
+      const p = spawn(process.execPath, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+      let out = '';
+      let err = '';
+      const timer = setTimeout(() => p.kill(), timeoutMs);
+      p.stdout.on('data', (d) => (out += d));
+      p.stderr.on('data', (d) => (err += d));
+      p.on('error', () => resolve(''));
+      p.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 ? out.trim() : '');
+        if (code !== 0 && err) log(`看分享的 B站视频没成: ${err.trim().split(/\r?\n/).pop().slice(0, 160)}`);
+      });
+    });
+  api.on('message:share', async (ev, { cards, text, isBili }) => {
+    let arg = '';
+    for (const piece of [...cards.filter(isBili).flatMap((c) => [c.url, c.desc, c.title]), text]) {
+      const ref = parseVideoRef(piece);
+      if (ref) {
+        arg = ref.bvid || (ref.aid ? `av${ref.aid}` : ref.short);
+        break;
+      }
+    }
+    if (!arg) return null;
+    if (ev.message_type !== 'group') api.showTyping(ev);
+    const out = await runText([env.BILI_SCRIPT || BILI, 'watch', arg], 45_000);
+    if (!out) return '（你点开那个B站视频，没打开，可能是链接坏了或者B站不让刷了）';
+    const body = out.split(/\r?\n/).filter((l) => !/--listen|--frames/.test(l)).join('\n').slice(0, 2500);
+    const more = api.isOwnerChat(ev) ? '\n想知道里面讲了啥、画面是啥，可以自己用刷 B站的工具加 --listen / --frames 再看。' : '';
+    return `（你点开看了这个B站视频：\n${body}${more}）`;
+  });
 
   // ── ChronoLife：她自己的小屋（chronolife/，SQLite）────────────────────────────
   // 打不开（老 Node 没有 node:sqlite、数据库坏了）就只记一笔：普通聊天照常，停发自主消息，短期记忆、长期事实、日记都当没有（memoryOff）
@@ -269,6 +307,13 @@ export default async function setup(api) {
     { id: 'music', name: '听歌', w: 2, how: `听听歌：node "${LIFE}" music 看看榜单（飙升/热歌/新歌/原创），或者直接 song 歌名 看你想听的那首的歌词和网易云热评` },
     { id: 'foryou', name: '找点对方会喜欢的', w: 2, how: '找找对方可能会喜欢的：照着下面你记得的对方的事（喜欢什么、在忙什么），用 bili.mjs search 或 life.mjs 搜一搜，挑一个你真心觉得 TA 会喜欢的', when: () => cfg.facts && cfg.proactiveQQ.length > 0 && factsOf(`u${cfg.proactiveQQ[0]}`).length >= 2 },
     { id: 'phone', name: '玩手机', w: 1, how: '玩会儿手机（AGENTS.md 里有手机控制的用法）', when: () => !!use('phone') }, // 装了手机插件才玩
+    {
+      id: 'memes',
+      name: '逛 DeepSeek 二创的评论区收表情包',
+      w: 2,
+      how: `逛逛 DeepSeek 二创，顺便收表情包：node "${BILI}" search DeepSeek二创 --order pubdate（也可以搜 DeepSeek娘、DeepSeek表情包），挑一个没看过的，node "${BILI}" pics BV号 看评论区里大家发的图，用 read_image 一张张看；真觉得好玩、以后想拿来斗图的，用 node "${BILI}" keep 图片完整路径 情绪 一句话描述 收进你的表情包（一次最多收 3 张，宁缺毋滥，跟你已经有的差不多的别收）。日记里记一笔收了什么、为啥喜欢。`,
+      when: () => !!cfg.stealStickers, // 收表情包开着（speech 插件的 STEAL_STICKERS）才去收
+    },
   ];
   function pickActivity(a, day) {
     if (!a.did || a.did.day !== day) a.did = { day, ids: [] };
@@ -328,7 +373,7 @@ export default async function setup(api) {
     doing.name = act.name;
     doing.at = Date.now();
     try {
-      const likes = cfg.facts ? factsOf(`u${qq}`).slice(-15).map((f) => `- ${f.t}`) : [];
+      const likes = cfg.facts ? factsOf(`u${qq}`).map((f) => `- ${f.t}`) : [];
       const forYou = likes.length ? `\n你记得对方的事：\n${likes.join('\n')}\n刷到跟对方喜好有关的，就发给对方，像“这个你肯定喜欢”“看到这个就想到你”那样，带上是啥（视频标题或 BV 号、歌名），说一句为啥想到 TA；不相关就别硬扯。` : '';
       const others = ACTIVITIES.filter((x) => x.id !== act.id && (!x.when || x.when())).map((x) => x.name).join('、');
       const prompt = `${persona()}${lifeBlock(qq)}${selfBlock()}\n\n---\n现在没人找你，你自己待着，没人管。\n这会儿你想${act.name}：${act.how}\n（真不想干这个也可以换别的：${others}、翻翻笔记、想想有什么好玩的。）最近在追、在迷的东西可以去看看有没有更新，也可以随便逛逛发现点新的。${forYou}\n最多折腾 5-10 分钟，别没完没了，也别改重要文件。\n如果看到好玩的、想分享的，就用 1-2 句发给对方；不想说就只输出 [SILENT]。\n不管说不说，最后都另起一行用 [日记:干了啥、看到了什么、你觉得怎么样] 记一笔，写具体点，有记住的梗、喜欢或讨厌的点也写上（比如 [日记:刷B站看了个修猫爬架的视频，UP主嘴特贫，笑死，弹幕都在刷『典』]）。对方看不到，这是你自己的备忘，以后被问“刚在干嘛”要对得上，睡前也会回想。\n看完心情要是变了（刷到好笑的、看哭了、被气到），再加一个 [心情:心情词|为啥]（心情词：开心、兴奋、平静、无聊、懒、嘴贫、烦、有点丧、委屈、生气、困）。\n不要问“需要我做什么”，不要汇报计划。`;
@@ -572,7 +617,7 @@ export default async function setup(api) {
     const same = list.find((g) => g.name === name);
     if (same) {
       Object.assign(same, { at: Date.now(), from: String(ev.user_id) }); // 又送一个一样的：挪到最前面，不重画
-      fs.writeFileSync(GIFT_FILE, JSON.stringify([...list.filter((g) => g !== same), same], null, 2));
+      api.writeAtomic(GIFT_FILE, JSON.stringify([...list.filter((g) => g !== same), same], null, 2));
       return void log(`收礼物：${name}（已经有了，摆到前面）`);
     }
     const day = state._giftDay?.day === dayKey() ? state._giftDay : (state._giftDay = { day: dayKey(), count: 0 });
@@ -586,7 +631,7 @@ export default async function setup(api) {
     const r = await runPyJson([path.join(HERE, 'scene', 'gift.py'), `${base}-raw.png`, `${base}.png`], 30_000);
     fs.rmSync(`${base}-raw.png`, { force: true });
     if (!r?.ok) throw new Error(`没抠出来（${r?.why || '没结果'}）`);
-    fs.writeFileSync(GIFT_FILE, JSON.stringify([...list, { name, file: `${base}.png`, from: String(ev.user_id), at: Date.now() }].slice(-12), null, 2));
+    api.writeAtomic(GIFT_FILE, JSON.stringify([...list, { name, file: `${base}.png`, from: String(ev.user_id), at: Date.now() }].slice(-12), null, 2));
     log(`收礼物：${name} 摆进了房间`);
     if (photoDay().count < cfg.photoMaxDay) {
       await reply(ev, pick(['摆好了 你看', '给你看看摆哪了', '放这儿了']));
@@ -1184,9 +1229,12 @@ node "${BILI}" watch BV号或链接        简介、标签、弹幕刷得最多�
 node "${BILI}" watch BV号 --listen 3   再用本地 Whisper 听前 3 分钟讲了啥（最多 3 分钟）
 node "${BILI}" watch BV号 --frames     再看画面：挑弹幕最密的时刻和换镜头的地方截图，每 9 格一张，用 read_image 一张张看
 node "${BILI}" seen                   最近看过的
+node "${BILI}" pics BV号或链接          评论区里大家发的图，按赞数挑，下成小图（动图不大就要原图），用 read_image 看
+node "${BILI}" keep 图片路径 情绪 描述   把 pics 下的一张收进你的表情包（情绪：开心/无语/生气/卖萌/得意/委屈/震惊）
 \`\`\`
 
 - 列表里标了“（看过）”的就别再看了，换一个。
+- 评论区的图主要去 DeepSeek 二创那边看（搜 DeepSeek二创、DeepSeek娘、DeepSeek表情包）：看中了、以后想拿来斗图的才 \`keep\`，一次最多收 3 张，描述写“画面：什么时候用”。截图、长图、广告、看不懂的别收。
 - 聊天类、知识类视频加 \`--listen\`；看画面的（搞笑、vlog、游戏）加 \`--frames\`；两个都加会慢一些。听要本地的 whisper 模型（.env 的 WHISPER_MODEL_DIR），没有就说没听成（不会去网上下），跟对方说听不了就行。
 - \`--listen\` 一次最多听前 3 分钟，写多了也按 3 分钟算。对方想让你看更久，就跟对方说一次只能看一会儿，看完说说看到了啥。
 - 看画面时对照“时间轴”：标了“弹幕高峰”的格子是观众反应最大的地方，配着那里刷的弹幕一起看，最能看懂笑点在哪。
