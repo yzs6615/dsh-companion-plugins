@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-proactive",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "主动找你：早安晚安、到点回访、主动戳你、等你回、每周一封信。",
   "type": "module",
   "main": "./index.js",
