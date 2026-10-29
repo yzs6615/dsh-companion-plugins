@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-pc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "电脑上的她：电脑室友（看得见你在放的歌、开的游戏）、喇叭说话、桌面便条、桌面抽屉、用 QQ 音乐放歌。只支持 Windows。",
   "type": "module",
   "main": "./index.js",

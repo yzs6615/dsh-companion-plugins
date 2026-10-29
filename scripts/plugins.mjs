@@ -1,5 +1,5 @@
 /** 全部插件的清单：打包、下载器、生成 DSH 入口都看这一份。 */
-export const VERSION = '0.1.0'
+export const VERSION = '0.2.0'
 export const REPO = 'yzs6615/dsh-companion-plugins'
 
 export const PLUGINS = [

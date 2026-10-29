@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "记得你：长期记住对方的事、记得作息、对你好奇、纪念日和天气、每天写日记。",
   "type": "module",
   "main": "./index.js",

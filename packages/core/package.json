@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "本体：连 QQ（NapCat / OneBot 11）、聊天、人设、短期记忆、熟悉度、白名单和权限；别的插件都装在它上面。",
   "type": "module",
   "main": "./index.js",

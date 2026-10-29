@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-phone",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "手机：用 adb 控制安卓手机（截图、点按、输入），手机看门狗，看手机直播。",
   "type": "module",
   "main": "./index.js",
