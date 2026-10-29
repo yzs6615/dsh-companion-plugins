@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-profile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "QQ 上的样子：在线状态和个签、自定义在线状态、心情头像、QQ 空间说说。",
   "type": "module",
   "main": "./index.js",
