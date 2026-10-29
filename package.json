@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-mood",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "心情和作息：心情有来由、会延续；作息被你带偏；主动找你没回会有点小情绪。",
   "type": "module",
   "main": "./index.js",
