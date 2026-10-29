@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-group",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "群聊：群白名单、叫名字唤醒、引用回复、偶尔插嘴、戳一戳。没装就不理群消息。",
   "type": "module",
   "main": "./index.js",
