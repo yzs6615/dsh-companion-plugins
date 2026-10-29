@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-speech",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "说话的样子：表情包（按意思挑、偷对方的表情包）、学对方说话、学某个人说话、发语音、唱歌。",
   "type": "module",
   "main": "./index.js",
