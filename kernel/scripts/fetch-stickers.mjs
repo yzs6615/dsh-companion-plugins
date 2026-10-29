@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * 下载 Twemoji（CC-BY 4.0）表情图，按情绪放进表情库 <数据目录>/stickers/<情绪>/（设了 STICKER_DIR 就放那）。
- * 每个情绪 10 张；已存在就跳过。想换素材直接替换目录里的图即可。
+ * 下载一套默认表情包：FeWOO/DeepSeek-meme 的 DeepSeek 小鲸鱼表情（MIT），按情绪放进表情库 <数据目录>/stickers/<情绪>/（设了 STICKER_DIR 就放那）。
+ * 一共 18 张；已存在就跳过。不再下 Twemoji 那套小黄脸 emoji。
+ * 想多要就自己往情绪目录里丢图，她也会从聊天里收你发的表情包。
  *
  *   node scripts/fetch-stickers.mjs
+ *
+ * STICKER_BASE 可以换下载地址（测试用本地的假服务器，不联网）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,40 +16,44 @@ import { dataDir } from './home.mjs';
 import { env } from '../config.mjs';
 
 const DIR = env.STICKER_DIR ? path.resolve(env.STICKER_DIR) : path.join(dataDir(env), 'stickers');
-const BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72';
+const BASE = env.STICKER_BASE || 'https://raw.githubusercontent.com/FeWOO/DeepSeek-meme/main/assets';
 
-const MOODS = {
-  开心: ['1f600', '1f603', '1f604', '1f601', '1f606', '1f605', '1f923', '1f602', '1f642', '1f643'],
-  无语: ['1f611', '1f612', '1f613', '1f614', '1f615', '1f616', '1f61f', '1f62e', '1f644', '1f928'],
-  生气: ['1f620', '1f621', '1f624', '1f625', '1f627', '1f628', '1f629', '1f62c', '1f92c', '1f92f'],
-  卖萌: ['1f970', '1f60d', '1f618', '1f617', '1f619', '1f61a', '1f63a', '1f638', '1f439', '1f430'],
-  得意: ['1f60e', '1f913', '1f60f', '1f612', '1f644', '1f929', '1f9d0', '1f60b', '1f61c', '1f92a'],
-  委屈: ['1f97a', '1f622', '1f62d', '1f625', '1f62a', '1f62b', '1f629', '1f630', '1f631', '1f633'],
-  震惊: ['1f631', '1f628', '1f630', '1f632', '1f626', '1f627', '1f62e', '1f92f', '1f633', '1f635'],
+// 包 → 图 → 情绪（按图里的意思分的）
+const PACKS = {
+  community: { 'big-idea': '得意', doomed: '委屈', 'full-belly': '卖萌', 'happy-point': '开心', kneel: '生气', stare: '无语', 'user-revolt': '生气', 'war-torn': '震惊' },
+  default: {
+    '01-received': '卖萌', '02-thanks': '开心', '03-im-here': '卖萌', '04-nice-work': '得意', '05-good-night': '委屈',
+    '06-good-morning': '开心', '07-milk-tea': '卖萌', '08-huh': '无语', '09-hmph': '得意', '10-sleepy': '委屈',
+  },
 };
 
-for (const [mood, codes] of Object.entries(MOODS)) {
-  const dir = path.join(DIR, mood);
-  fs.mkdirSync(dir, { recursive: true });
-  for (const code of codes) {
-    const dest = path.join(dir, `${code}.png`);
-    if (fs.existsSync(dest) && fs.statSync(dest).size > 100) continue;
+let got = 0;
+let failed = 0;
+for (const [pack, files] of Object.entries(PACKS)) {
+  for (const [name, mood] of Object.entries(files)) {
+    const dir = path.join(DIR, mood);
+    fs.mkdirSync(dir, { recursive: true });
+    const dest = path.join(dir, `deepseek-${pack}-${name}.webp`);
+    if (fs.existsSync(dest) && fs.statSync(dest).size > 500) {
+      got++;
+      continue;
+    }
     try {
-      const res = await fetch(`${BASE}/${code}.png`);
-      if (!res.ok) {
-        console.log(`skip ${mood}/${code}: HTTP ${res.status}`);
-        continue;
-      }
+      const res = await fetch(`${BASE}/${pack}/${name}.webp`, { signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length < 100) {
-        console.log(`skip ${mood}/${code}: too small`);
-        continue;
-      }
+      if (buf.length < 500) throw new Error('太小');
       fs.writeFileSync(dest, buf);
+      got++;
     } catch (err) {
-      console.log(`err ${mood}/${code}: ${err.message}`);
+      failed++;
+      console.log(`没下成 ${pack}/${name}：${err.message}`);
     }
   }
-  const n = fs.readdirSync(dir).filter((f) => f.endsWith('.png')).length;
+}
+for (const mood of new Set(Object.values(PACKS).flatMap((p) => Object.values(p)))) {
+  const n = fs.readdirSync(path.join(DIR, mood)).filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).length;
   console.log(`${mood}: ${n} 张`);
 }
+console.log(`默认表情包：${got} 张到位${failed ? `，${failed} 张没下成` : ''}（目录 ${DIR}）`);
+process.exitCode = got > 0 ? 0 : 1; // 别 process.exit()：fetch 的连接还没收完就退，Windows 上的 Node 会崩（退出码 3221226505）

@@ -8,6 +8,7 @@
  * messages continue the same conversation.
  */
 import { spawn, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -126,10 +127,10 @@ const REMINDERS_FILE = path.join(DATA_DIR, 'reminders.json');
 const state = readJson(STATE_FILE, {});
 const reminders = readJson(REMINDERS_FILE, []);
 function saveState() {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  writeAtomic(STATE_FILE, JSON.stringify(state, null, 2));
 }
 function saveReminders() {
-  fs.writeFileSync(REMINDERS_FILE, JSON.stringify(reminders, null, 2));
+  writeAtomic(REMINDERS_FILE, JSON.stringify(reminders, null, 2));
 }
 function userState(qq) {
   const key = String(qq);
@@ -208,11 +209,39 @@ function backfillCloseness() {
   }
 }
 
-function readJson(file, fallback) {
+function readJson(file, fallback, keepBroken = true) {
+  let text;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    text = fs.readFileSync(file, 'utf8');
   } catch {
+    return fallback; // 还没有这个文件
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    // 读得到但不是完整的 JSON（多半是写到一半断了电）：原样另存一份再用默认值，别下次一保存就把它盖没了。
+    // 别的程序正在写的文件（学歌写的 song.json）不留，读到半截很正常。
+    try {
+      if (keepBroken && text.trim()) {
+        const keep = `${file}.broken-${Date.now()}`;
+        fs.copyFileSync(file, keep);
+        log(`${path.basename(file)} 坏了（读不成 JSON），原样留了一份 ${path.basename(keep)}，先用空的`);
+      }
+    } catch {
+      /* 留不了就算了 */
+    }
     return fallback;
+  }
+}
+/** 先写临时文件再换名：写到一半断电，原来的文件还在，不会读出半截。换名失败（被别的程序占着）就直接写。 */
+function writeAtomic(file, text) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, text);
+  try {
+    fs.renameSync(tmp, file);
+  } catch {
+    fs.writeFileSync(file, text);
+    fs.rmSync(tmp, { force: true });
   }
 }
 function log(...args) {
@@ -257,7 +286,8 @@ function persona() {
 // 跨会话的“还记得”能力：每轮把双方的话留一行，下一轮拼进 prompt。
 // 只保留最近 30 行，够用又不会把 token 撑爆。
 function memoryFile(chatKey) {
-  const safe = String(chatKey).replace(/[^a-zA-Z0-9:_-]/g, '_');
+  // 冒号也换掉：群聊是 g群号:u号，Windows 会把带冒号的文件名当成隐藏的数据流，记忆存不进去
+  const safe = String(chatKey).replace(/[^a-zA-Z0-9_-]/g, '_');
   return path.join(MEMORY_DIR, `${safe}.md`);
 }
 function readMemory(chatKey) {
@@ -283,7 +313,7 @@ function appendMemory(chatKey, userText, answer) {
     } catch {}
     lines.push(`- 对方：${clip(userText)}`);
     lines.push(`- 你：${clip(answer)}`);
-    fs.writeFileSync(file, lines.slice(-30).join('\n') + '\n');
+    writeAtomic(file, lines.slice(-30).join('\n') + '\n');
   } catch (err) {
     log(`记忆写入失败: ${err.message}`);
   }
@@ -364,19 +394,58 @@ function groupContext(groupId, excludeIds = [], limit = 10) {
     .join('\n');
 }
 
-function buildPrompt(ev, text, isGroup, chatKey, excludeIds = []) {
+/** 跟 collect 一样问一遍，但每个钩子给的那段分开返回：[{ key, text, every }]（key = 钩子名#插件#第几个，同一套插件里不会变）。 */
+function collectEach(name, ...args) {
+  return hookList(name).map((h, i) => {
+    let text = '';
+    try {
+      text = h.fn(...args) || '';
+    } catch (err) {
+      hookFail(name, h, err);
+    }
+    return { key: `${name}#${h.from}#${i}`, text, every: !!h.fn.every };
+  });
+}
+/**
+ * 每轮的提示词按块拼。同一段会话里已经塞过、内容也没变的块（人设、记得的事、日记、能办的事……，每个插件给的那段各算一块）
+ * 不再重复塞，只塞变了的、每轮都会变的和对方这句话：省下的上下文留给真聊天，会话压缩也晚得多。
+ * 【此刻】、规矩（钩子函数上标了 every = true 的）每轮都塞；记着的那几句只在整个重发时塞（会话里本来就有这些对话）。
+ * prev 是这段会话上次记下的 { blocks: 块名 → 内容指纹, turns: 离上次整个重发过了几轮 }；
+ * 没有 prev（新会话、会话刚被压缩过）或者过了 FULL_PROMPT_EVERY 轮，就整个重发一遍。
+ * 返回 { text, sent }：sent 等这轮跑成了再记进 sessions.json，跑失败就不记，下一轮照旧补上。
+ */
+function buildPrompt(ev, text, isGroup, chatKey, excludeIds = [], prev = null) {
   const head = persona();
-  if (!head) return text;
+  if (!head) return { text, sent: null };
+  const full = !cfg.stickyPrompt || !prev || (prev.turns || 0) >= cfg.fullPromptEvery;
+  const blocks = full ? {} : { ...(prev.blocks || {}) };
+  const put = (name, body, how = '') => {
+    if (!body) {
+      delete blocks[name]; // 这轮没有这块：下次再出现（哪怕字一样，比如又被冷落了、又好久没发表情包）照样塞
+      return '';
+    }
+    if (how === 'every') return body;
+    if (how === 'fullOnly') return full ? body : '';
+    const h = createHash('sha1').update(body).digest('hex').slice(0, 12);
+    if (!full && blocks[name] === h) return '';
+    blocks[name] = h;
+    return body;
+  };
   const who = senderName(ev) || String(ev.user_id);
   const scene = isGroup ? `群聊（群 ${ev.group_id}）里有人 @ 你` : '私聊';
   const mem = readMemory(chatKey);
   const memBlock = mem ? `\n\n---\n你之前和这个人聊过（记着的几句）：\n${mem}` : '';
   const turn = { ev, text, isGroup, chatKey, qq: ev.user_id, who, excludeIds };
-  // 背景块按 order 拼（见 docs/插件接口.md），整段再过一遍 context:filter（删掉的记忆在那里拦）
-  const oldContext = collect('prompt:context', turn) + memBlock + collect('prompt:context-late', turn);
-  const remembered = pipe('context:filter', oldContext, chatKey);
-  const continuous = collect('prompt:after', turn);
-  return `${head}${lifeBlock(ev.user_id)}${remembered}${continuous}\n\n---\n对方：${who}\n场景：${scene}\n对方刚说：\n${text}\n\n（不管做完没做完，最后都用 1-2 句话回对方，别只调工具就沉默。）${collect('prompt:hint', turn)}`;
+  // 背景块按 order 拼（见 docs/插件接口.md），每块都过一遍 context:filter（删掉的记忆在那里拦）
+  const filt = (s) => (s ? pipe('context:filter', s, chatKey) : '');
+  const each = (name) => collectEach(name, turn).map((b) => put(b.key, filt(b.text), b.every ? 'every' : '')).join('');
+  const remembered = each('prompt:context') + put('recent', filt(memBlock), 'fullOnly') + each('prompt:context-late');
+  const continuous = collectEach('prompt:after', turn).map((b) => put(b.key, b.text, b.every ? 'every' : '')).join('');
+  const hints = collectEach('prompt:hint', turn).map((b) => put(b.key, b.text, b.every ? 'every' : '')).join('');
+  return {
+    text: `${put('persona', head)}${put('now', lifeBlock(ev.user_id), 'every')}${remembered}${continuous}\n\n---\n对方：${who}\n场景：${scene}\n对方刚说：\n${text}\n\n（不管做完没做完，最后都用 1-2 句话回对方，别只调工具就沉默。）${hints}`,
+    sent: cfg.stickyPrompt ? { blocks, turns: full ? 1 : (prev.turns || 0) + 1 } : null,
+  };
 }
 
 // ── OneBot helpers ────────────────────────────────────────────────────────
@@ -426,11 +495,76 @@ function textOf(segs) {
       if (s.type === 'face') return `[QQ表情:${faceName(s.data)}]`;
       if (s.type === 'dice') return `[掷骰子:${s.data?.result ?? '?'}点]`;
       if (s.type === 'rps') return '[猜拳]';
+      if (CARD_TYPES.has(s.type) && cfg.shareCards) {
+        const c = parseCard(s);
+        return c ? cardLine(c) : '';
+      }
       return '';
     })
     .join('')
     .trim();
 }
+/** 只有打的字（不含卡片、表情），群里认“叫没叫她”用：别让分享来的视频标题把她喊出来。 */
+function typedOf(segs) {
+  return segs.map((s) => (s.type === 'text' ? s.data?.text || '' : '')).join('').trim();
+}
+
+// ── 分享卡片（QQ 里“分享”过来的 B站视频、歌、网页）─────────────────────────────
+// NapCat 发来的是 json 段（data.data 是一段 JSON 字符串），老一点的是 xml 段；OneBot 标准里还有 share / music 段。
+// 不认的话整条消息是空的，会被当成空消息丢掉。认出来写成一行“[分享了…]”；
+// B站视频再交给 message:share 钩子（life 插件用刷 B站那套真去看一眼）。
+const CARD_TYPES = new Set(['json', 'xml', 'share', 'music']);
+const cardClean = (s, n = 120) => String(s || '').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim().slice(0, n);
+/** 一个卡片段 → { kind: 'music' | 'link' | 'other', source, title, desc, url }；认不出、或者是合并转发，返回 null。 */
+function parseCard(seg) {
+  const d = seg?.data || {};
+  if (seg?.type === 'share') return { kind: 'link', source: '', title: cardClean(d.title), desc: cardClean(d.content, 200), url: String(d.url || '') };
+  if (seg?.type === 'music') {
+    const source = { qq: 'QQ音乐', 163: '网易云音乐', kugou: '酷狗', kuwo: '酷我' }[d.type] || '';
+    return { kind: 'music', source, title: cardClean(d.title), desc: cardClean(d.content), url: String(d.url || '') };
+  }
+  if (seg?.type === 'xml') {
+    const x = String(d.data || '');
+    const pick = (re) => cardClean(x.match(re)?.[1] || '');
+    const title = pick(/<title>([^<]*)<\/title>/) || pick(/brief="([^"]*)"/);
+    return title ? { kind: 'link', source: pick(/<source[^>]*name="([^"]*)"/), title, desc: pick(/<summary>([^<]*)<\/summary>/), url: pick(/url="([^"]*)"/) } : null;
+  }
+  if (seg?.type !== 'json') return null;
+  let j;
+  try {
+    j = typeof d.data === 'string' ? JSON.parse(d.data) : d.data;
+  } catch {
+    return null;
+  }
+  if (!j || typeof j !== 'object' || /multimsg/.test(String(j.app || ''))) return null; // 合并转发走 forward 那边
+  const meta = j.meta && typeof j.meta === 'object' ? j.meta : {};
+  const prompt = cardClean(j.prompt);
+  if (meta.music) {
+    const m = meta.music;
+    return { kind: 'music', source: cardClean(m.tag, 20), title: cardClean(m.title), desc: cardClean(m.desc), url: String(m.jumpUrl || m.musicUrl || '') };
+  }
+  if (meta.news) {
+    const m = meta.news;
+    return { kind: 'link', source: cardClean(m.tag, 20), title: cardClean(m.title) || prompt, desc: cardClean(m.desc, 200), url: String(m.jumpUrl || '') };
+  }
+  if (meta.detail_1) {
+    // 小程序：title 是哪个 App（“哔哩哔哩”），desc 才是分享的东西
+    const m = meta.detail_1;
+    return { kind: 'link', source: cardClean(m.title, 20), title: cardClean(m.desc) || prompt, desc: '', url: String(m.qqdocurl || m.url || '') };
+  }
+  return prompt ? { kind: 'other', source: '', title: prompt.replace(/^\[[^\]]*\]\s*/, '') || prompt, desc: '', url: '' } : null;
+}
+const isBiliCard = (c) => /哔哩哔哩|bilibili/i.test(c.source) || /b23\.tv|bili2233\.cn|bilibili\.com\/video/i.test(c.url);
+/** 卡片写成给她看的一行。链接只留 http(s) 的，太长截掉。 */
+function cardLine(c) {
+  const url = /^https?:\/\//i.test(c.url) ? ` ${c.url.slice(0, 200)}` : '';
+  if (c.kind === 'music') return c.title ? `[分享了一首歌：《${c.title}》${c.desc ? ` ${c.desc}` : ''}${c.source ? `（${c.source}）` : ''}]` : '[分享了一首歌]';
+  if (isBiliCard(c)) return `[分享了一个B站视频：${c.title}${url}]`;
+  if (c.kind === 'link') return `[分享了一个链接：${c.title}${c.source ? `（${c.source}）` : ''}${c.desc && c.desc !== c.title ? ` —— ${c.desc}` : ''}${url}]`;
+  return `[分享：${c.title}]`;
+}
+/** 这条消息里认得出的卡片。 */
+const cardsOf = (segs) => segs.filter((s) => CARD_TYPES.has(s.type)).map(parseCard).filter(Boolean);
 function mentions(segs, qq) {
   return segs.some((s) => s.type === 'at' && String(s.data?.qq) === String(qq));
 }
@@ -1247,6 +1381,7 @@ function runAgent(prompt, sessionId, opts = {}) {
       let finalText = null;
       let session = sessionId || null;
       let errorText = null;
+      let ctx = 0; // 最后一步带了多大的上下文（新算的 + 缓存命中的，token）：看会话有没有被压缩
       for (const line of stdout.split(/\r?\n/)) {
         if (!line.trim()) continue;
         try {
@@ -1254,12 +1389,16 @@ function runAgent(prompt, sessionId, opts = {}) {
           if (ev.type === 'session' && ev.sessionId) session = ev.sessionId;
           if (ev.type === 'final') finalText = ev.text ?? '';
           if (ev.type === 'error' && ev.message) errorText = ev.message;
+          if (ev.type === 'status' && ev.phase === 'step_end' && ev.usage) {
+            const u = ev.usage;
+            ctx = (u.inputTokens || 0) + (u.cacheReadTokens || 0) + (u.cacheWriteTokens || 0) || ctx;
+          }
         } catch {
           /* non-JSON line: ignore */
         }
       }
       if (code === 0 && finalText !== null) {
-        settle(resolve, { text: finalText, session });
+        settle(resolve, { text: finalText, session, ctx });
       } else {
         const detail = (errorText || stderr.trim().split('\n').slice(-3).join(' | ') || `退出码 ${code}`).slice(0, 500);
         settle(reject, new Error(detail));
@@ -1316,6 +1455,9 @@ async function handleEvent(ev) {
     images.push(...media.images);
     text = text ? `${media.note}\n${text}` : media.note;
   }
+  // 分享来的东西（卡片、打的链接）：装了的插件可以去真看一眼（life 插件看 B站视频），看到的写在这句后面
+  const shared = cfg.shareCards ? await first('message:share', ev, { cards: cardsOf(clean), text, isBili: isBiliCard }) : null;
+  if (shared) text = `${text}\n${shared}`;
   const voice = await readVoice(clean, ev);
   if (voice?.failed && !text && !images.length) {
     await reply(ev, pick(DEAF_LINES)); // 只发了条语音、又没听成：直接让对方打字，不用过模型
@@ -1554,14 +1696,16 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
           collect('prompt:images', turn) +
           ']'
         : '';
-      const prompt = buildPrompt(ev, text, isGroup, chatKey, ids) + imgNote;
       const tRun = Date.now();
       const known = use('life')?.memoryOff() ? null : sessions[chatKey]?.sessionId; // 开着 ChronoLife 但它没起来：不续接旧会话
+      // 这段会话里已经有哪些块（没变的不再塞）；新会话就整个发
+      let built = buildPrompt(ev, text, isGroup, chatKey, ids, known ? sessions[chatKey]?.sent || null : null);
+      let fresh = !known;
       // 权限分级：只有主人私聊用 DSH_PERMISSION_MODE（能动手机、电脑、文件）；别人私聊、群里（谁都一样）只读，只陪聊
       const agentOpts = isOwnerChat(ev) ? {} : { permissionMode: 'read-only' };
       let result;
       try {
-        result = await runAgent(prompt, known, agentOpts);
+        result = await runAgent(built.text + imgNote, known, agentOpts);
       } catch (err) {
         // 只有会话真没了 / 坏了（清过 DSH_HOME、换过 profile）才丢掉重开；超时、起不来这些保留会话，
         // 不整轮重跑（不然一轮超时会变成两轮、还把上下文丢了），下面统一用人设口吻回一句让对方再说一遍。
@@ -1569,10 +1713,18 @@ async function processTurn({ ev, text, images, isGroup, chatKey, who, ids, stick
         log(`会话 ${known} 不可用，重开: ${err.message}`);
         delete sessions[chatKey];
         saveSessions();
-        result = await runAgent(prompt, null, agentOpts);
+        built = buildPrompt(ev, text, isGroup, chatKey, ids, null); // 新会话里什么都没有：整个重发
+        fresh = true;
+        result = await runAgent(built.text + imgNote, null, agentOpts);
       }
       if (result.session) {
-        sessions[chatKey] = { sessionId: result.session, updatedAt: Date.now() };
+        const prevCtx = (!fresh && sessions[chatKey]?.ctx) || 0;
+        // 这轮带的上下文比上一轮少了一大截：会话被压缩过，前面塞的人设、记得的事可能跟着压成了摘要，下一轮整个重发
+        const compacted = !fresh && prevCtx > 50_000 && result.ctx > 0 && result.ctx < prevCtx * 0.6;
+        if (compacted) log(`会话 ${result.session} 被压缩过（上下文 ${prevCtx} → ${result.ctx} token），下一轮整个重发提示词`);
+        // 跑进了别的会话（没带 known 的那段）也当没塞过，下一轮整个发
+        const sent = (fresh || result.session === known) && !compacted ? built.sent : null;
+        sessions[chatKey] = { sessionId: result.session, updatedAt: Date.now(), ...(sent ? { sent } : {}), ...(result.ctx ? { ctx: result.ctx } : {}) };
         saveSessions();
       }
       let answer = humanize(result.text);
@@ -1809,7 +1961,6 @@ async function sendPicAsked(ev, raw) {
 function naturalHint(t) {
   const uid = String(t.qq);
   let out = '\n- 对方让你过会儿或到点提醒 TA 做什么：写 [提醒:几分钟后|提醒啥]（“半小时后”写 30，“两个小时后”写 120）；说的是钟点就写 [提醒:年-月-日 时:分|提醒啥]（照上面【此刻】的日期时间算，比如“明天早上8点”）。提醒啥写短点，像“喝水”“出门拿快递”，到点会私聊发“该喝水了”。没说什么时候就先问，别自己定。';
-  out += '\n- [提醒] 只能设一次性的：对方要“每天”“每周”这种重复的，就设最近的那一次，跟 TA 说清楚每天重复的还不支持；别自己去建计划任务、定时任务。';
   const mine = t.isGroup ? [] : reminders.filter((r) => r.qq === uid && r.at > Date.now()).sort((a, b) => a.at - b.at);
   if (mine.length) out += `\n- 你答应了到点提醒对方的（对方问有哪些提醒就照这个说）：${mine.slice(0, 8).map((r) => `${whenDesc(r.at)} ${r.text}`).join('；')}${mine.length > 8 ? `，一共 ${mine.length} 个` : ''}`;
   out += collect('natural:hint', t);
@@ -1826,6 +1977,7 @@ function guardHint(t) {
     '想出声只能用你自己的声音，不准用系统语音（System.Speech / SAPI / SpeechSynthesizer / say 这些）念，那是机器声。',
     'QQ 资料（昵称、签名、头像、在线状态）由系统管，别自己改；对方要你改，就说一声让主人自己改。',
     '发消息、发图都在回复里写，别自己去连 OneBot / NapCat 的接口。',
+    '[提醒] 只能设一次性的：对方要“每天”“每周”这种重复的，就设最近的那一次，跟 TA 说清楚每天重复的还不支持；别自己去建计划任务、定时任务。',
   ];
   if (!isOwnerChat(t.ev)) {
     out.push(t.isGroup
@@ -1836,7 +1988,9 @@ function guardHint(t) {
 }
 // 提示词最末尾：教她写 [心情] 10（mood）、表情包 15（speech）、照片 20、礼物 30（life）、放歌 40（pc）之后
 on('prompt:hint', (t) => naturalHint(t), 50);
-on('prompt:hint', (t) => guardHint(t), 60);
+const guardHook = (t) => guardHint(t);
+guardHook.every = true; // 规矩每轮都塞：别人私聊、群里不许动手这些，不能只靠会话开头塞过的那一遍
+on('prompt:hint', guardHook, 60);
 
 /** /help：告诉对方这些直接说就行（例子按装了哪些插件、开了哪些功能出，各插件在 help 钩子里给），只把排错用的列成命令。 */
 function helpText(ev) {
@@ -1882,9 +2036,12 @@ function writeAgentsMd() {
 // 同一份数据只能有一个内核在跑（不然一条消息回两遍）：data/kernel.pid 里记着正在跑的那个
 const PID_FILE = path.join(DATA_DIR, 'kernel.pid');
 {
-  const other = Number(readJson(PID_FILE, 0)) || 0;
+  // 老版本的机器人（agent-bridge 的 bridge.mjs，记在 bridge.pid）在同一份数据上跑着也算；它改跑插件版时两个文件记的是同一个进程
+  let other = 0;
   let alive = false;
-  if (other && other !== process.pid) {
+  for (const f of [PID_FILE, path.join(DATA_DIR, 'bridge.pid')]) {
+    other = Number(readJson(f, 0, false)) || 0;
+    if (!other || other === process.pid) continue;
     try {
       process.kill(other, 0);
       alive = true;
@@ -1897,6 +2054,7 @@ const PID_FILE = path.join(DATA_DIR, 'kernel.pid');
         alive = /node\.exe/i.test(execFileSync('tasklist', ['/FI', `PID eq ${other}`, '/NH'], { encoding: 'utf8', windowsHide: true }));
       } catch {}
     }
+    if (alive) break;
   }
   if (alive) {
     log(`已经有一个内核在跑（进程 ${other}），这个先不起`);
@@ -1939,11 +2097,11 @@ applyClosenessSet(); // 要在补齐之后：目标分是按补齐后的自然�
 // 插件拿到的东西：内核的状态、发消息、调模型、拼提示词用的小工具，加上登记钩子 / 服务 / 定时任务的方法。
 // 只放插件真用得到的；插件之间不直接 import，要用别人的东西走 use('服务名')。
 const api = {
-  cfg, env, parseList, human, ROOT, DATA_DIR, log, readJson, pick, sleep, pace,
+  cfg, env, parseList, human, ROOT, DATA_DIR, log, readJson, writeAtomic, pick, sleep, pace,
   state, saveState, userState, closeness, sessions, saveSessions,
   persona, memoryFile, readMemory, appendMemory, diaryToday, addDiary,
   online: () => !!ws && ws.readyState === 1, selfId: () => selfId,
-  sendRaw, sendMsg, sendPrivate, reply, say, showTyping, recordGroup, segments, textOf, senderName,
+  sendRaw, sendMsg, sendPrivate, reply, say, showTyping, recordGroup, segments, textOf, typedOf, parseCard, senderName,
   groupContext, mentions, quotesMe, activeChats, batches, owner: () => ownerQQ(), isOwnerChat, // 主人是谁、是不是主人私聊（权限分级都认这个）
   runAgent, runQueued, runPyJson, downloadTo, saveImages, humanize, humanBubbles,
   myState: (...a) => myState(...a), quiet: () => quietNow(), lifeBlock: (...a) => lifeBlock(...a),
