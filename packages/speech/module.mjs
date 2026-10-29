@@ -408,7 +408,7 @@ export default function setup(api) {
         .filter((d) => d.isDirectory())
         .map((d) => {
           const dir = path.join(SONG_DIR, d.name);
-          const meta = readJson(path.join(dir, 'song.json'), null);
+          const meta = readJson(path.join(dir, 'song.json'), null, false);
           if (!meta) return null;
           const clips = (meta.clips || []).filter((c) => fs.existsSync(path.join(dir, c.file)));
           return clips.length ? { title: meta.title || d.name, artist: meta.artist || '', dir, clips } : null;
@@ -504,25 +504,34 @@ export default function setup(api) {
     ['委屈', ['委屈', '欺负', '凶我', '难过', '想哭']],
     ['震惊', ['卧槽', '真的假的', '什么鬼', '惊了', '离谱']],
   ];
+  // “6”只认单独打出来的那个梗（“6”“666”“行 6”）：“6点”“16号”“2026”里的 6 不算，不然一说时间日期就补一张无语图
+  const MEME_SIX = /(^|[\s，。！？、,.!?~～…])6+(?=$|[\s，。！？、,.!?~～…])/;
   /** 模型没写 [表情:xx] 时，按回复里的梗/语气补一个情绪。 */
   function autoMood(text) {
     for (const [mood, words] of MOOD_WORDS) {
-      if (words.some((w) => text.includes(w))) return mood;
+      if (words.some((w) => (w === '6' ? MEME_SIX.test(text) : text.includes(w)))) return mood;
     }
     return '';
   }
 
-  let lastSticker = '';
+  // 最近发过的几张（“情绪/文件名”），挑图时先避开，别老发那几张；记在 state 里，重启了也记得
+  const RECENT_STICKERS = 12;
+  const recentStickers = () => (state._stickerRecent ||= []);
+  function rememberSticker(rel) {
+    const r = recentStickers();
+    r.push(rel);
+    while (r.length > RECENT_STICKERS) r.shift(); // 不单独存盘：别的地方存 state 时顺带就存上了，发表情这一步别多一次写盘
+  }
   /**
    * 发一张表情：写的是七种情绪之一 → 那个目录里随机一张；写的是“想表达的意思”（无语翻白眼、笑到打滚…）
-   * → 按 index.json 里每张图的描述挑最贴的；挑不到就按里面的梗猜个情绪，再不行就算了。
+   * → 按 index.json 里每张图的描述挑最贴的；挑不到就按里面的梗猜个情绪，再不行就算了。最近发过的 12 张先不挑。
    */
   async function sendSticker(ev, mood) {
     try {
       if (!STICKER_MOODS.includes(mood)) {
-        const hit = pickByMeaning(STICKER_DIR, mood, { avoid: lastSticker });
+        const hit = pickByMeaning(STICKER_DIR, mood, { avoid: recentStickers() });
         if (hit) {
-          lastSticker = hit.rel;
+          rememberSticker(hit.rel);
           await sendMsg(ev, [{ type: 'image', data: { file: 'base64://' + fs.readFileSync(hit.file).toString('base64') } }]);
           return true;
         }
@@ -533,11 +542,13 @@ export default function setup(api) {
       if (!fs.existsSync(dir)) return false;
       const files = fs.readdirSync(dir).filter((f) => /\.(png|jpe?g|gif|webp)$/i.test(f));
       if (!files.length) return false;
-      // 一半机会用从聊天里收来的（更像熟人）；否则优先 deepseek- 开头的那批，再退回普通表情。
-      const learned = files.filter((f) => /^learned-/i.test(f));
-      const deepseek = files.filter((f) => /^deepseek-/i.test(f));
-      const pool = learned.length && Math.random() < 0.5 ? learned : deepseek.length ? deepseek : files;
-      const file = path.join(dir, pool[Math.floor(Math.random() * pool.length)]);
+      // 整个情绪目录里随便挑（收来的、梗图、默认表情一视同仁；以前一半机会专挑收来的那一两张，老是重样），最近发过的先不挑
+      const recent = new Set(recentStickers());
+      const fresh = files.filter((f) => !recent.has(`${mood}/${f}`));
+      const pool = fresh.length ? fresh : files;
+      const name = pool[Math.floor(Math.random() * pool.length)];
+      rememberSticker(`${mood}/${name}`);
+      const file = path.join(dir, name);
       // base64:// avoids OneBot implementations mangling non-ASCII local paths.
       const buf = fs.readFileSync(file);
       await sendMsg(ev, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }]);
@@ -726,7 +737,7 @@ export function features(cfg, { env, ROOT, DATA_DIR, readJson, on }) {
       ['说话的样子', [
         ['表情包', on(stickers > 0), `${stickers} 张（其中 ${learnedStickers} 张是从聊天里收的）· 模型没点表情时 35% 概率按梗补一张`, '一条回复最多一张，发在文字后面。'],
         ['表情包按意思挑', 'on', `${Object.keys(readJson(path.join(STICKER_DIR, 'index.json'), {})).length} 张有描述`, `每张表情图配了一句“画面：用法”的描述（node "${path.join(ROOT, 'scripts', 'sticker-index.mjs')}" 让模型看图写），她想表达“无语翻白眼”“笑到打滚”就挑最贴的那张；对不上就不硬发。新收的表情包会自己补描述。`],
-        ['偷表情包', on(cfg.stealStickers), `每种情绪最多留 ${cfg.stealMax} 张收来的 · 发表情时一半机会用收来的`, '对方发的表情包（只认 QQ 标成表情的图，普通照片不收），它觉得好玩就按情绪收进自己的表情库，以后自己也用。'],
+        ['偷表情包', on(cfg.stealStickers), `每种情绪最多留 ${cfg.stealMax} 张收来的 · 发表情时跟别的图一起挑`, '对方发的表情包（只认 QQ 标成表情的图，普通照片不收），它觉得好玩就按情绪收进自己的表情库，以后自己也用。'],
         ['学说话', on(cfg.learnStyle && cfg.facts), '和长期事实一起提炼，不多花模型调用', '从聊天里学对方的口头禅、语气词、爱用的梗，偶尔学着用（越熟越容易被带跑偏）。'],
         ['学某个人说话', on(cfg.mimic), (() => { const m = readJson(path.join(DATA_DIR, 'mimic.json'), {}).active; if (!m) return '没在学谁：把一段聊天合并转发给它，回序号选人'; const k = Math.max(0.15, Math.min(1, cfg.mimicRampDays > 0 ? (Date.now() - m.startedAt) / 86400_000 / cfg.mimicRampDays : 1)); return `在学「${m.name}」· 大概 ${Math.round(k * 10)} 成（${cfg.mimicRampDays} 天学到位）· 习惯：${(m.traits || []).join('；')}`; })(), '合并转发聊天记录给它 → 选一个人 → 总结 TA 的说话习惯，按天数慢慢带进自己的语气；不冒充那个人、不搬原话里的私事。问她在学谁就知道进度，说“别学了”停掉并删掉素材（/学说话 /别学了 也行）。'],
         ['发语音', on(cfg.voice), cfg.voice ? `百炼 CosyVoice 复刻音色 · ${cfg.voiceModel} · ${cfg.voiceMaxChars} 字以内才念 · 一天最多 ${cfg.voiceMaxDay} 条${cfg.voiceCutMs ? ` · 句尾再剪 ${cfg.voiceCutMs}ms` : ''}` : '没开：.env 里要有 VOICE_ID 和 DASHSCOPE_API_KEY', '它觉得这句适合说出来（笑、吐槽、撒娇、晚安，或者你让它发语音）就用自己的声音发 QQ 语音；合成后自动去掉开头结尾的杂音。太长、发够了、合成失败都改成打字。语音能带语气：生气、难过、委屈、害怕、惊讶、嫌弃、困，她可以写 [语音:害怕] 自己点；没点就跟着有来由的心情走（你惹她生气、委屈、烦你，或者熬夜后犯困），没来由的心情不算；带语气的音量压一压，不会突然很大声。开心的语气试过跟生气听不出区别，没做。/说话 xxx 直接念给你听（不带心情）。'],

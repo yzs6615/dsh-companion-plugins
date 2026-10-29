@@ -88,6 +88,7 @@ async function start(port, extraEnv, { seed, onApi } = {}) {
       DSH_CLI: path.join(ROOT, 'test', 'fake-dsh.mjs'),
       DSH_HOME: path.join(data, 'dsh-home'),
       DSH_PERMISSION_MODE: 'danger-full-access',
+      STICKY_PROMPT: 'false', // 这里一轮轮看提示词里教了什么，所以每轮全塞（同一段会话里不重复塞另有 sticky-prompt-e2e 测）
       BRIDGE_DATA: data,
       STICKER_DIR: path.join(data, 'stickers'),
       AGENT_CWD: ROOT,

@@ -133,6 +133,8 @@ dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#core
 | `MAX_PROMPT_CHARS` | `6000` | 一条消息太长就截断 |
 | `MAX_MESSAGE_AGE_SEC` | `120` | 比这更早的消息（比如刚连上时补过来的）不回 |
 | `MEMORY` | 开 | 短期记忆 |
+| `STICKY_PROMPT` | 开 | 同一段会话里，没变过的提示词块（人设、记得的事、日记、能办的事……）不再每轮重复塞，只塞变了的和此刻的状态 |
+| `FULL_PROMPT_EVERY` | `25` | 隔几轮整个重发一次（新会话、会话被压缩过也会整个重发） |
 
 **像人的节奏**
 
@@ -160,6 +162,7 @@ dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#core
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
+| `SHARE_CARDS` | 开 | 看懂分享卡片（B站视频、歌、链接）；装了 life 时 B站视频会真去看一眼 |
 | `MEDIA` | 开 | 看懂发来的视频和文件 |
 | `MEDIA_MAX_MB` | `60` | 比这大的不下 |
 | `WHISPER_MODEL_DIR` | 空 | 本地 faster-whisper 模型目录（下面要有 `base/model.bin`）；不设就不“听”视频和 QQ 语音 |

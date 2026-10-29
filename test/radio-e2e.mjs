@@ -118,8 +118,11 @@ try {
   await waitFor(() => linkSent(0));
   await sleep(300); // 发完链接还要收个尾（记日记），别抢在这之前点下一期
   const order = sent.map(kind);
-  check(order[0] === 'text' && /录|等|马上|想想/.test(textOf(sent[0])) && !textOf(sent[0]).includes('http'), `先回一句（${textOf(sent[0])}）`);
-  check(order[1] === 'image', '然后是节目卡（图）');
+  // 开场那句可能拆成两条（困的时候“困死了…行吧 等我录”在省略号处断开），节目卡前面的字都算
+  const firstImg = order.indexOf('image');
+  const opener = sent.slice(0, Math.max(firstImg, 1)).map(textOf).join(' ');
+  check(firstImg >= 1 && order.slice(0, firstImg).every((k) => k === 'text') && /录|等|马上|想想/.test(opener) && !opener.includes('http'), `先回一句（${opener}）`);
+  check(firstImg >= 1, '然后是节目卡（图）');
   const voices1 = order.filter((k) => k === 'voice').length;
   check(voices1 >= 1 && order.lastIndexOf('voice') < sent.findIndex((m) => textOf(m).includes('music.163.com')), `语音 ${voices1} 条，在歌的链接前面`);
   check(sent.every((m) => !textOf(m).includes('/电台') && !textOf(m).includes('[电台')), '没往外发命令提示或标记');

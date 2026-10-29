@@ -68,8 +68,20 @@ const server = http.createServer((req, res) => {
   } else if (p === '/x/v1/dm/list.so') {
     res.writeHead(200, { 'content-type': 'text/xml' });
     return res.end(`<?xml version="1.0"?><i>${['哈哈哈哈哈', '哈哈哈哈', '哈哈哈', '典', '典', '老王牛逼', '我家也有一台'].map((t, i) => `<d p="${i * 10}.5,1,25,16777215">${t}</d>`).join('')}</i>`);
-  } else if (p === '/x/v2/reply/wbi/main') body = ok({ replies: [{ like: 12000, content: { message: '小时候就是看这台电视长大的' } }] });
-  else body = JSON.stringify({ code: -404, message: 'nope' });
+  } else if (p === '/x/v2/reply/wbi/main') {
+    // 评论区的图：热评带一张静图，楼中楼带一张小动图；第二条热评带一张大图，外加一张跟第一条重复的
+    const pic = (name, kb) => ({ img_src: `http://127.0.0.1:3994/pic/${name}`, img_size: kb });
+    body = ok({
+      replies: [
+        { like: 12000, content: { message: '小时候就是看这台电视长大的', pictures: [pic('a.png', 300)] }, replies: [{ like: 5, content: { message: '哈哈', pictures: [pic('c.gif', 500)] } }] },
+        { like: 300, content: { message: '笑死', pictures: [pic('b.jpg', 4000), pic('a.png', 300)] } },
+      ],
+      cursor: { is_end: true },
+    });
+  } else if (p.startsWith('/pic/')) {
+    res.writeHead(200, { 'content-type': 'image/webp' });
+    return res.end(Buffer.alloc(800, 9));
+  } else body = JSON.stringify({ code: -404, message: 'nope' });
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(body);
 });
@@ -139,6 +151,27 @@ try {
     check(times.length === 4 && scenes.size === 4, `4 帧正好是 4 个不同的镜头，没有重复（${times.join(',')}）`);
   } else {
     check(false, `生成测试视频失败：${(gen.stderr || '').slice(-200)}`);
+  }
+
+  // ── 评论区的图、收进表情包 ──
+  {
+    const pc = await run('pics', 'BV1xx411c7mD', '--n', '5');
+    const picDir = path.join(data, 'bili', 'pics', 'BV1xx411c7mD');
+    const got = fs.existsSync(picDir) ? fs.readdirSync(picDir).sort() : [];
+    check(got.join(',') === '01.webp,02.webp,03.gif', `pics：热评和楼中楼带的图都翻到、重复的只要一张、按赞数排（${got.join(',')}）`);
+    check(hits.includes('/pic/a.png@300w.webp') && hits.includes('/pic/b.jpg@300w.webp') && hits.includes('/pic/c.gif'), 'pics：静图要 300 宽的小图，不大的动图要原图');
+    check(pc.includes('read_image') && pc.includes(' keep ') && pc.includes('1.2万赞'), 'pics：列出赞数，告诉她怎么看、怎么收');
+    const first = path.join(picDir, '01.webp');
+    const k1 = await run('keep', first, '开心', '鲸鱼比耶：开心、得意');
+    const stk = path.join(data, 'stickers', '开心');
+    const kept = fs.existsSync(stk) ? fs.readdirSync(stk).filter((f) => f.startsWith('learned-bili-')) : [];
+    const idx = fs.existsSync(path.join(data, 'stickers', 'index.json')) ? JSON.parse(fs.readFileSync(path.join(data, 'stickers', 'index.json'), 'utf8')) : {};
+    check(kept.length === 1 && idx[`开心/${kept[0]}`]?.desc === '鲸鱼比耶：开心、得意' && k1.includes('收好了'), 'keep：收进开心目录，描述写进索引');
+    check((await run('keep', first, '无语', '再收一次')).includes('收过了'), 'keep：同一张不收两次（换个情绪也不行）');
+    check((await run('keep', path.join(picDir, '02.webp'), '难过', 'x')).includes('情绪只能是'), 'keep：情绪不对不收');
+    const outside = path.join(data, 'outside.png');
+    fs.writeFileSync(outside, Buffer.alloc(1000, 1));
+    check((await run('keep', outside, '开心', 'x')).includes('只能收 pics 下下来的'), 'keep：pics 以外的文件不收');
   }
 
   mode = 'ban';

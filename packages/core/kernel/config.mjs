@@ -54,6 +54,10 @@ export const cfg = {
   wakeWords: parseList(env.WAKE_WORDS || env.BOT_NAME || '小伴'), // 机器人的名字：群里叫这些词能把它叫出来，私聊点电台时也会去掉
   quietHours: (env.QUIET_HOURS || '23-9').split('-').map(Number), // 这几个钟头不出声、不留条、不发空间（各插件主动做事前看 api.quiet()）
   memoryEnabled: (env.MEMORY || 'true') !== 'false',
+  // 同一段会话里，没变过的提示词块（人设、记得的事、日记、能办的事……）不再每轮重复塞，只塞变了的和每轮都变的。
+  // 每 FULL_PROMPT_EVERY 轮、会话被压缩过、新开的会话，整个重发一遍。STICKY_PROMPT=false = 跟以前一样每轮全塞。
+  stickyPrompt: (env.STICKY_PROMPT || 'true') !== 'false',
+  fullPromptEvery: Number(env.FULL_PROMPT_EVERY ?? 25),
   // 主动找谁（早安晚安、回访、写信在 proactive 插件里；自己找事做的分享、ChronoLife、明信片、主人是谁也认这个）
   // 自己找事做、ChronoLife、做梦、人设成长、电台、明信片、现场照、收礼物的设置在她自己的生活（life）插件里
   proactiveQQ: parseList(env.PROACTIVE_QQ || ''),
@@ -74,6 +78,7 @@ export const cfg = {
   recall: (env.RECALL || 'true') !== 'false', // 对方撤回：没回的那条就不回了；熟人偶尔调侃一句
   recallTeaseProb: Number(env.RECALL_TEASE_PROB ?? 0.5),
   pcOwner: env.PC_OWNER || '', // 电脑是谁的 QQ（默认 PROACTIVE_QQ 第一个）。主人是谁本体也要用（写信、明信片、作息被带偏…），电脑上的她那些设置在 pc 插件里
+  shareCards: (env.SHARE_CARDS || 'true') !== 'false', // 看懂分享卡片（B站视频、歌、链接）；装了 life 插件时 B站视频会真去看一眼
   media: (env.MEDIA || 'true') !== 'false', // 看懂发来的视频（抽帧 + 听）和文件
   mediaMaxMB: Number(env.MEDIA_MAX_MB ?? 60),
   hearVoice: (env.HEAR_VOICE || 'true') !== 'false', // 听对方发来的 QQ 语音：本地 Whisper 转成字（只用本地模型，不联网），没模型 / 没听清就让对方打字

@@ -83,6 +83,7 @@ async function start(port, extraEnv, seed) {
       ALLOWED_GROUPS: String(GROUP),
       PROACTIVE_QQ: String(OWNER),
       DSH_CLI: path.join(ROOT, 'test', 'fake-dsh.mjs'),
+      STICKY_PROMPT: 'false', // 这里一轮轮看提示词里教了什么，所以每轮全塞（同一段会话里不重复塞另有 sticky-prompt-e2e 测）
       DSH_HOME: path.join(data, 'dsh-home'),
       BRIDGE_DATA: data,
       STICKER_DIR: path.join(data, 'stickers'),

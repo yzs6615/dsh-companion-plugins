@@ -23,7 +23,7 @@ const walk = (d) => {
   }
 };
 walk(path.join(ROOT, 'packages'));
-const files = fs.readdirSync(path.join(ROOT, 'test')).filter((f) => /\.mjs$/.test(f) && !['fake-dsh.mjs', 'fake-asr.mjs', 'radio.mjs'].includes(f));
+const files = fs.readdirSync(path.join(ROOT, 'test')).filter((f) => /\.mjs$/.test(f) && !['fake-dsh.mjs', 'fake-asr.mjs', 'fake-bili.mjs', 'radio.mjs'].includes(f));
 
 let bad = 0;
 const counts = []; // [名字, 通过几条]：最后列一张表

@@ -38,8 +38,9 @@ export default function setup(api) {
       recordGroup(ev.group_id, { id: ev.message_id, uid: ev.user_id, name: senderName(ev), text: spoken || '（图）' });
     }
     if (mentions(segs, api.selfId()) || (await quotesMe(segs))) return { wokeWord: '' };
-    // 没 @ 也不要紧：叫名字/外号、或者引用它说过的话，都能把它喊出来
-    const wokeWord = cfg.wakeWords.find((w) => spoken.includes(w)) || '';
+    // 没 @ 也不要紧：叫名字/外号、或者引用它说过的话，都能把它喊出来（只看打的字，分享来的卡片标题不算）
+    const typed = api.typedOf ? api.typedOf(segs) : spoken;
+    const wokeWord = cfg.wakeWords.find((w) => typed.includes(w)) || '';
     if (wokeWord) return { wokeWord };
     // 刚跟它说完话的人接着说，不用再叫一遍名字（除非这句明显是 @ 别人）。
     const lastTalk = engaged.get(`${ev.group_id}:${ev.user_id}`) || 0;

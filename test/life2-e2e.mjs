@@ -174,8 +174,10 @@ try {
   // 5. 表情包按意思挑
   next();
   say('MEANSTICKER');
-  await waitFor(() => sent.slice(mark).some((x) => x.img));
-  check(sent.slice(mark).find((x) => x.img).img === PNG_B.toString('base64'), '[表情:无语翻白眼] 挑到了“熊猫头翻白眼”那张');
+  // 认“行”后面那张：上一轮按梗随手补的图晚到了别当成这一轮的，这一轮的图也别拖进下一步
+  const meant = () => { const s = sent.slice(mark); const k = s.findIndex((x) => x.text.includes('行')); return k < 0 ? null : s.slice(k).find((x) => x.img); };
+  await waitFor(() => meant());
+  check(meant().img === PNG_B.toString('base64'), '[表情:无语翻白眼] 挑到了“熊猫头翻白眼”那张');
   next();
   say('NOMATCHSTICKER');
   await waitFor(() => got().includes('行'));

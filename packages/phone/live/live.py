@@ -151,7 +151,8 @@ def transcribe(wav_path: Path, model_size: str = "small") -> dict:
     print(f"[live] loading whisper {model_size} (cpu/int8)...", flush=True)
     model = WhisperModel(str(local), device="cpu", compute_type="int8", local_files_only=True)
     segments, info = model.transcribe(
-        str(wav_path), language="zh", vad_filter=True, beam_size=5
+        str(wav_path), language="zh", vad_filter=True, beam_size=5,
+        initial_prompt="以下是普通话的句子，用简体中文。",  # 不给这句，base 模型常常听出繁体字
     )
     parts = []
     for seg in segments:

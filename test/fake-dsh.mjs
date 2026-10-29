@@ -11,6 +11,8 @@ if (process.env.FAKE_PROMPT_LOG) (await import('node:fs')).appendFileSync(proces
 const m = prompt.match(/对方刚说：\s*\n([\s\S]*?)(?:\n\n（|$)/);
 const userText = (m ? m[1] : prompt).trim();
 let reply = `[fake] 收到: ${userText} (会话 ${sessionId})`;
+// FAKE_ALL_PROMPTS：每次被叫都把整段提示词存一行，测提示词里带了什么
+if (process.env.FAKE_ALL_PROMPTS) (await import('node:fs')).appendFileSync(process.env.FAKE_ALL_PROMPTS, JSON.stringify(prompt) + '\n');
 // FAKE_CALL_LOG：每次被叫记一行（权限、带没带会话、是哪种调用），测权限分级、超时不重跑
 if (process.env.FAKE_CALL_LOG) {
   const kind = prompt.includes('整理自己对一个朋友的长期记忆') ? 'facts' : prompt.includes('你想起一件事，顺口问一句') ? 'followup' : userText.match(/[A-Z][A-Z_]{3,}/)?.[0] || 'chat';
@@ -231,6 +233,15 @@ if (!prompt.includes('整理自己对一个朋友的长期记忆') && !prompt.in
 
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 emit({ type: 'session', sessionId });
+// 报用量（跟真 dsh 一样在 step_end 里）：带着会话时，上下文 = 提示词字数累计；对方说 COMPACTED 就当会话刚被压缩过，只剩一点
+if (process.env.FAKE_USAGE) {
+  const fs = await import('node:fs');
+  const file = `${process.env.FAKE_USAGE}.${sessionId}`;
+  const before = Number(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : 0) || 0;
+  const ctx = userText.includes('COMPACTED') ? 20_000 : before + prompt.length + 60_000;
+  fs.writeFileSync(file, String(ctx));
+  emit({ type: 'status', phase: 'step_end', turn: 1, step: 1, usage: { inputTokens: 500, outputTokens: 50, cacheReadTokens: ctx - 500, cacheWriteTokens: 0, totalTokens: ctx + 50 } });
+}
 emit({ type: 'status', phase: 'turn_end', turn: 1, reason: { kind: 'completed' } });
 emit({ type: 'final', text: reply });
 process.exit(0);

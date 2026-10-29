@@ -24,7 +24,7 @@ export function settings(env, parseList) {
     weatherCity: env.WEATHER_CITY || '', // 默认城市；每个人也可以跟她说“我在杭州”（或者发 /城市 杭州）
     journal: (env.JOURNAL || 'true') !== 'false', // 每天写日记，当长期上下文
     journalHour: Number(env.JOURNAL_HOUR ?? 23), // 几点后写当天的日记（没写成第二天补）
-    journalDays: Number(env.JOURNAL_DAYS ?? 7), // 聊天时带最近几天的日记
+    journalDays: Number(env.JOURNAL_DAYS ?? 30), // 聊天时带最近几天的日记（同一段会话里没变就不重复塞，所以可以多带）
     journalCheckMs: Number(env.JOURNAL_CHECK_MS ?? 600_000),
   };
 }
@@ -42,7 +42,20 @@ export default function setup(api) {
   // ── 长期事实 + 回访 ───────────────────────────────────────────────────────
   // 滚动的聊天记录会被冲掉，所以隔几轮让模型把“值得长期记住的事”提炼出来，
   // 存在 <聊天>.facts.json；对方提到的将来的事（考试、面试…）记成回访，到点主动问。
-  const MAX_FACTS = 40;
+  // 最多 300 条，聊天时全带上（同一段会话里没变就不重复塞）。快满时让模型把同一件事合成一条；还多就先丢最早的“小事”，
+  // 称呼、家里人、宠物、雷点、生日这种要紧的不按时间丢（模型自己说作废的照样删），实在太多（400）才硬砍。
+  const MAX_FACTS = 300;
+  const HARD_MAX_FACTS = 400;
+  const CORE_FACT = /称呼|叫(我|他|她|对方|你|TA)|外号|名字|昵称|生日|纪念日|家里|爸|妈|父亲|母亲|哥|姐|弟|妹|对象|男朋友|女朋友|老婆|老公|猫|狗|宠物|雷点|讨厌|过敏|忌口|不吃|害怕/;
+  /** 超过上限时先丢最早的不要紧的，再不行才按时间砍。返回留下的。 */
+  function trimFacts(facts) {
+    const out = facts.slice();
+    for (let i = 0; out.length > MAX_FACTS && i < out.length; ) {
+      if (CORE_FACT.test(out[i].t)) i++;
+      else out.splice(i, 1);
+    }
+    return out.length > HARD_MAX_FACTS ? out.slice(-HARD_MAX_FACTS) : out;
+  }
   function factsFile(chatKey) {
     return memoryFile(chatKey).replace(/\.md$/, '.facts.json');
   }
@@ -67,7 +80,7 @@ export default function setup(api) {
   }
   api.provide('facts', { readFacts, writeFacts });
   function factBlockOf(chatKey) {
-    const facts = cfg.facts ? readFacts(chatKey).facts.slice(-20) : [];
+    const facts = cfg.facts ? readFacts(chatKey).facts : [];
     return facts.length ? `\n\n---\n你记得关于这个人的事（自然地用，别逐条背出来）：\n${facts.map((f) => `- ${f.t}`).join('\n')}` : '';
   }
   let factsRunning = false;
@@ -91,6 +104,9 @@ export default function setup(api) {
         `- 别猜对方的性别：用对方说的名字或“对方”，不要写“她/他”。\n` +
         `- 对方提到了将来某个时间点的事时，才写 followups：ask 是你之后想顺口问的话题（例如“问问考试考得怎么样”），at 是事情发生之后你想问的时间，晚上 8 点前、早上 9 点后。没有就留空数组。\n` +
         `- style 只看“对方”说的话：反复出现的口头禅、语气词、爱用的梗和外号、标点/表情习惯（比如“爱说『草』”“句尾老带『捏』”“喜欢叫你『小笨蛋』”“不爱打标点”）。只写确实出现过两次以上的，每条不超过 20 字，别写你自己的说话方式，别重复已有的。\n` +
+        (data.facts.length >= MAX_FACTS - 8
+          ? `- 已有记忆 ${data.facts.length} 条，快满了（最多 ${MAX_FACTS} 条）：把说同一件事的合成一条（旧的原文写进 drop，合起来的写进 add），过时的、一次性的删掉；怎么称呼、家里人、宠物、雷点、生日这种要紧的别删。\n`
+          : '') +
         `- 没什么可更新的就输出 {"add":[],"drop":[],"followups":[],"style":[],"styleDrop":[]}。`;
       const r = await runAgent(prompt, null, { permissionMode: 'read-only' }); // 只要一段 JSON，不用工具
       const out = parseJsonLoose(r.text);
@@ -105,7 +121,9 @@ export default function setup(api) {
         const t = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 60);
         if (t && !facts.some((f) => f.t === t)) facts.push({ t, at: now });
       }
-      facts = facts.slice(-MAX_FACTS);
+      const before = facts.length;
+      facts = trimFacts(facts);
+      if (facts.length < before) log(`事实提炼 ${chatKey}: 记忆满了，丢了 ${before - facts.length} 条最早的小事`);
       const followups = data.followups.filter((f) => !f.done || now - f.due < 7 * 86400_000);
       for (const f of Array.isArray(out.followups) ? out.followups : []) {
         const ask = String(f?.ask || '').trim().slice(0, 80);
@@ -318,7 +336,7 @@ export default function setup(api) {
     }
     fs.mkdirSync(JOURNAL_DIR, { recursive: true });
     const sign = String(out?.sign || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-    fs.writeFileSync(path.join(JOURNAL_DIR, `${day}.json`), JSON.stringify({ day: text, with: withMap, ...(sign ? { sign } : {}), at: Date.now() }, null, 2));
+    api.writeAtomic(path.join(JOURNAL_DIR, `${day}.json`), JSON.stringify({ day: text, with: withMap, ...(sign ? { sign } : {}), at: Date.now() }, null, 2));
     log(`日记：写好了 ${day}（聊了 ${Object.keys(withMap).length} 个人）`);
     // 今天的日记写完就换个签（补写昨天的不换）；聊过的人的名字一律不许出现在个签里
     if (sign && day === dayKey()) await api.use('presence')?.setLongnick(sign, [...new Set(raw.map((r) => String(r.who || '').replace(/\(\d+\)$/, '')))]);
@@ -413,6 +431,12 @@ export default function setup(api) {
   api.on('prompt:state', (qq) => (qq ? dayBlock(qq) : ''), 20);
   api.on('prompt:context', (t) => factBlockOf(t.chatKey), 50);
   api.on('prompt:context', (t) => journalBlock(t.chatKey), 60);
+  // 翻以前聊过的：会话里找不到的老事，主人私聊里让她自己去日记流水里搜（每轮聊天一行，一直留着）。
+  // 别的聊天不给：流水里有主人的私聊，不能翻给别人看。
+  api.on('prompt:context', (t) => {
+    if (t.isGroup || !cfg.journal || !api.isOwnerChat(t.ev) || !fs.existsSync(JOURNAL_RAW)) return '';
+    return `\n\n---\n想不起来以前跟对方聊过的事（上面没有、你也记不清的）：可以自己去 ${JOURNAL_RAW} 里翻。每天一个 .jsonl，一行一轮：k 是哪个聊天（跟对方的是 ${t.chatKey}）、who 是谁、t 是时间（毫秒）、u 是对方说的、a 是你回的。按关键词搜（Select-String / rg / grep），只看 k 是 ${t.chatKey} 的；翻到了就自然地接上，别说“我查了记录”。`;
+  }, 65);
   api.on('prompt:context', (t) => (t.isGroup ? '' : rhythmBlock(t.qq)), 130);
   api.on('prompt:context', (t) => (t.isGroup ? '' : curiousBlock(t.qq, t.chatKey)), 140);
   // 消息进来时要记的：第一次说话是认识的日子、今天第一次冒头的时间（作息）
@@ -558,13 +582,13 @@ export default function setup(api) {
 export function features(cfg, { DATA_DIR, state, readJson, esc, when, on }) {
   const clockOfMin = (m) => { const x = (m + 300) % 1440; return `${Math.floor(x / 60)}:${String(x % 60).padStart(2, '0')}`; };
   const factsOf = (chatKey) => {
-    const f = readJson(path.join(DATA_DIR, 'memory', `${chatKey.replace(/[^a-zA-Z0-9:_-]/g, '_')}.facts.json`), null);
+    const f = readJson(path.join(DATA_DIR, 'memory', `${chatKey.replace(/[^a-zA-Z0-9_-]/g, '_')}.facts.json`), null);
     return { facts: Array.isArray(f?.facts) ? f.facts : [], followups: Array.isArray(f?.followups) ? f.followups : [], style: Array.isArray(f?.style) ? f.style : [] };
   };
   return {
     groups: [
       ['记得你', [
-        ['长期事实', on(cfg.facts), `每 ${cfg.factsEvery} 轮提炼一次，提到考试/生日/称呼等要紧事 2 轮后提前`, '让模型把聊天提炼成长期记得的事（每人最多 40 条），以后的对话会带上。', 10],
+        ['长期事实', on(cfg.facts), `每 ${cfg.factsEvery} 轮提炼一次，提到考试/生日/称呼等要紧事 2 轮后提前`, '让模型把聊天提炼成长期记得的事（每人最多 300 条），聊天时全部带上（同一段会话里没变就不重复塞）。快满时让模型把同一件事合成一条；还多就先丢最早的小事，称呼、家里人、宠物、雷点、生日这种要紧的不会因为“太早”被丢。', 10],
         ['记得你的作息', on(cfg.rhythm), (() => { const qs = Object.entries(state).filter(([k, v]) => /^\d+$/.test(k) && v?.rhythm); return qs.length ? qs.map(([k, v]) => `${k}：平时 ${clockOfMin(v.rhythm.wake)} 冒头、${clockOfMin(v.rhythm.sleep)} 没动静（${v.rhythm.days} 天）`).join('；') : '聊满 4 天才看得出'; })(), '从聊天时间摸清你平时几点冒头、几点没动静；今天比平时晚睡、早起，她会注意到，顺口说一句（一天只说一次）。', 30],
         ['对你好奇', on(cfg.curious), `每轮 ${Math.round(cfg.curiousProb * 100)}% 提醒她一次，一天最多一次`, '记住的事里还没提到的方面（是干嘛的、住哪、喜欢干嘛、爱吃啥、养没养猫狗、生日），她会找机会自然地问一句，同一个方面一周内不重复。', 40],
         ['纪念日和天气', on(cfg.anniversary || cfg.weather), cfg.weatherCity ? `默认城市：${cfg.weatherCity}` : '跟她说“我在杭州”告诉她你在哪（或发 /城市 杭州）', '认识第 100 天、周年、你的生日（跟她说一声就记下，或发 /生日 5-20）那天她心里知道，上午会主动说一句；你那边下雨、降温、很热很冷时会顺口提醒（天气来自 Open-Meteo，免费）。认识的日子可以在 .env 写 MEET_DATE=QQ号:2025-05-15。', 50],

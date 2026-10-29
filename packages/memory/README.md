@@ -44,7 +44,7 @@ dsh plugin --profile web add github:yzs6615/dsh-companion-plugins#memory
 | `WEATHER_CITY` | 空 | 默认城市；每个人也可以跟她说“我在杭州”（或发 `/城市 杭州`） |
 | `JOURNAL` | 开 | 每天写日记 |
 | `JOURNAL_HOUR` | `23` | 几点后写当天的日记（没写成第二天补） |
-| `JOURNAL_DAYS` | `7` | 聊天时带最近几天的日记 |
+| `JOURNAL_DAYS` | `30` | 聊天时带最近几天的日记（同一段会话里没变就不重复塞） |
 | `JOURNAL_CHECK_MS` | `600000` | 多久看一次该不该写日记（毫秒） |
 
 ## 命令

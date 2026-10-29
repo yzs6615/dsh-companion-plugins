@@ -77,7 +77,7 @@ export default function setup(api) {
     if (cfg.proactiveLLM === false) return '';
     try {
       const mem = readMemory(`u${qq}`);
-      const facts = cfg.facts ? readFacts(`u${qq}`).facts.slice(-20) : [];
+      const facts = cfg.facts ? readFacts(`u${qq}`).facts : [];
       const dream = kind === 'morning' ? takeDream(`u${qq}`) : '';
       const scene =
         kind === 'morning'
